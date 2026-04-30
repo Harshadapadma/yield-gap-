@@ -33,7 +33,8 @@ _RED      = "#F85149"
 _YELLOW   = "#F0883E"
 _GREY     = "#8B949E"
 _WHITE    = "#E6EDF3"
-_FONT     = "IBM Plex Mono, monospace"
+_FONT      = "IBM Plex Mono, monospace"
+_TICK_FONT = "Georgia, 'Times New Roman', serif"
 
 
 # ── Plotly chart builders ─────────────────────────────────────────────────────
@@ -46,18 +47,21 @@ def _base_layout(title: str, ytitle: str) -> dict:
         font=dict(family=_FONT, color=_GREY, size=11),
         xaxis=dict(
             gridcolor=_BORDER, showgrid=True,
-            tickfont=dict(color=_GREY, size=10),
+            tickfont=dict(color=_GREY, size=10, family=_TICK_FONT),
             hoverformat="%d %b %Y",
-            dtick="M24", tickformat="%Y",   # show a year label every 2 years
+            showspikes=True,
+            spikecolor=_GREY, spikethickness=1, spikedash="dot", spikemode="across",
         ),
         yaxis=dict(
             gridcolor=_BORDER, showgrid=True,
-            tickfont=dict(color=_GREY, size=10),
+            tickfont=dict(color=_GREY, size=10, family=_TICK_FONT),
             title=dict(text=ytitle, font=dict(color=_GREY, size=10)),
             ticksuffix="%",
         ),
         margin=dict(l=50, r=145, t=50, b=40),
         hovermode="x unified",
+        hoverdistance=100,
+        spikedistance=400,
         legend=dict(
             orientation="h",
             yanchor="top", y=1.08,
@@ -124,17 +128,25 @@ def plot_breadth_time_series(
             hoverinfo="skip",
         ))
 
-    # Invisible hover trace (carries tooltip data)
+    # Expand monthly data to daily so hover works at every pixel on the line
+    _daily_idx = pd.date_range(pct.index[0], pct.index[-1], freq="D")
+    pct_daily  = pct.reindex(_daily_idx).ffill()
+    cd_daily   = (
+        df[["count_eligible", "benchmark_return"]]
+        .reindex(_daily_idx)
+        .ffill()
+    )
+
     fig.add_trace(go.Scatter(
-        x=pct.index, y=pct,
+        x=pct_daily.index, y=pct_daily,
         mode="lines",
         name="% beating benchmark",
         line=dict(color=_BLUE, width=0),
-        customdata=df[["count_eligible", "benchmark_return"]].values,
+        customdata=cd_daily.values,
         hovertemplate=(
             "<b>%{y:.1f}%</b> of stocks beat benchmark<br>"
             "Benchmark return: %{customdata[1]:.1f}%<br>"
-            "Eligible stocks: %{customdata[0]}<extra></extra>"
+            "Eligible stocks: %{customdata[0]:.0f}<extra></extra>"
         ),
     ))
 
@@ -145,7 +157,7 @@ def plot_breadth_time_series(
         mode="lines", name="6M Moving Avg",
         line=dict(color=_YELLOW, width=1.0, dash="dot"),
         opacity=0.6,
-        hovertemplate="6M MA: %{y:.1f}%<extra></extra>",
+        hoverinfo="skip",
     ))
 
     # ── Statistical SD bands (Avg, ±1σ, ±2σ) ─────────────────────────────────
@@ -163,7 +175,7 @@ def plot_breadth_time_series(
             y=level, yref="y",
             text=label, showarrow=False,
             xanchor="left", yanchor="middle",
-            font=dict(color=colour, size=9, family=_FONT),
+            font=dict(color=colour, size=9, family=_TICK_FONT),
         )
 
     layout = _base_layout(
@@ -172,8 +184,20 @@ def plot_breadth_time_series(
     )
     layout["yaxis"]["range"] = [0, 100]
 
-    # ── Pin x-axis to actual data range — no empty left/right space ──────────
+    # ── Pin x-axis to actual data range and set dynamic tick spacing ─────────
     if not pct.empty:
+        n_days = (pct.index[-1] - pct.index[0]).days
+        _D = 24 * 3600 * 1000           # one day in milliseconds
+        if n_days > 7 * 365:           # > 7 years   → every year
+            layout["xaxis"].update(dtick="M12",    tickformat="%Y")
+        elif n_days > 365:             # 1–7 years   → every quarter
+            layout["xaxis"].update(dtick="M3",     tickformat="%b '%y")
+        elif n_days > 182:             # 6m–1 year   → every month
+            layout["xaxis"].update(dtick="M1",     tickformat="%b '%y")
+        elif n_days > 30:              # 1–6 months  → every 3 days
+            layout["xaxis"].update(dtick=3 * _D,   tickformat="%d %b")
+        else:                          # ≤ 1 month   → every day
+            layout["xaxis"].update(dtick=_D,       tickformat="%d %b")
         layout["xaxis"]["range"] = [
             pct.index[0].strftime("%Y-%m-%d"),
             pct.index[-1].strftime("%Y-%m-%d"),
@@ -373,47 +397,26 @@ def render_breadth_analysis() -> None:
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
     # ── Main fetch-and-compute flow ───────────────────────────────────────────
-    if not fetch_btn:
-        # Check if we have cached results from a previous run in session
-        cached_result = st.session_state.get("breadth_result")
-        snap = cached_result.get("snapshot_df") if cached_result else None
-        snap_has_price = snap is not None and "Price (₹)" in snap.columns
-        if cached_result and snap_has_price \
-                and cached_result.get("universe") == universe_name \
-                and cached_result.get("benchmark") == benchmark_name \
-                and cached_result.get("window") == window_days:
-            _render_results(
-                cached_result["breadth_df"],
-                cached_result["bench_series"],
-                cached_result["snapshot_df"],
-                cached_result["bench_ret"],
-                universe_name, benchmark_name, window_label,
-                date_from, date_to, show_dist, show_snapshot, show_bench_px,
-            )
-        else:
-            st.info(
-                "👈 Select Universe, Benchmark, and Window in the sidebar, "
-                "then click **🚀 Fetch & Analyse**."
-            )
-            st.markdown(
-                f"""
-                <div style='background:{_BG2};border:1px solid {_BORDER};
-                            border-radius:8px;padding:16px 20px;
-                            font-family:{_FONT};font-size:11px;color:{_GREY}'>
-                    <b style='color:{_WHITE}'>ℹ️ How it works</b><br><br>
-                    1. Fetches current {universe_name} constituents from NSE<br>
-                    2. Downloads historical daily prices via yfinance (cached locally)<br>
-                    3. At each month-end, computes each stock's {window_label} return<br>
-                    4. Counts how many beat the {benchmark_name}'s {window_label} return<br>
-                    5. Plots that percentage over time<br><br>
-                    <b style='color:{_YELLOW}'>⚡ First run</b>: ~60–120s for 500 stocks.
-                    Subsequent runs: &lt;5s from cache.<br><br>
-                    <b style='color:{_RED}'>⚠️ Note</b>: Uses <i>current</i> index 
-                    constituents applied historically (survivorship bias applies).
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    cached_result = st.session_state.get("breadth_result")
+    snap = cached_result.get("snapshot_df") if cached_result else None
+    snap_has_price = snap is not None and "Price (₹)" in snap.columns
+    has_matching_cache = (
+        cached_result and snap_has_price
+        and cached_result.get("universe")   == universe_name
+        and cached_result.get("benchmark")  == benchmark_name
+        and cached_result.get("window")     == window_days
+    )
+
+    if not fetch_btn and has_matching_cache:
+        # Fast path: render from session cache
+        _render_results(
+            cached_result["breadth_df"],
+            cached_result["bench_series"],
+            cached_result["snapshot_df"],
+            cached_result["bench_ret"],
+            universe_name, benchmark_name, window_label,
+            date_from, date_to, show_dist, show_snapshot, show_bench_px,
+        )
         return
 
     # ── Fetch + Compute ───────────────────────────────────────────────────────

@@ -13,6 +13,8 @@ from __future__ import annotations
 import pandas as pd
 import plotly.graph_objects as go
 
+_TICK_FONT = "Georgia, 'Times New Roman', serif"
+
 THEME = {
     "bg":       "#0D1117",
     "paper":    "#161B22",
@@ -30,24 +32,20 @@ THEME = {
 
 
 def _x_axis_dtick(df: pd.DataFrame) -> dict:
-    """
-    Return xaxis tick settings that keep labels readable regardless of range.
-    - > 8 years   → annual ticks,    format: 2015 / 2016 / 2020
-    - 3–8 years   → 6-monthly ticks, format: Jan 2020 / Jul 2020
-    - 6m–3 years  → monthly ticks,   format: Jan '22 / Feb '22
-    - < 6 months  → weekly ticks
-    """
     if df.empty:
         return {}
+    _D = 24 * 3600 * 1000
     n_days = (df.index[-1] - df.index[0]).days
-    if n_days > 2920:      # > 8 years
+    if n_days > 7 * 365:    # > 7 years  → every year
         return dict(dtick="M12", tickformat="%Y")
-    elif n_days > 1095:    # 3–8 years
-        return dict(dtick="M6", tickformat="%b %Y")
-    elif n_days > 182:     # 6 months–3 years
-        return dict(dtick="M1", tickformat="%b '%y")
-    else:                  # < 6 months
-        return dict(dtick="W1", tickformat="%d %b '%y")
+    elif n_days > 365:      # 1–7 years  → every quarter
+        return dict(dtick="M3",  tickformat="%b '%y")
+    elif n_days > 182:      # 6m–1 year  → every month
+        return dict(dtick="M1",  tickformat="%b '%y")
+    elif n_days > 30:       # 1–6 months → every 3 days
+        return dict(dtick=3 * _D, tickformat="%d %b")
+    else:                   # ≤ 1 month  → every day
+        return dict(dtick=_D,     tickformat="%d %b")
 
 
 def _base_layout(fig: go.Figure, title: str = "", height: int = 480) -> go.Figure:
@@ -63,16 +61,21 @@ def _base_layout(fig: go.Figure, title: str = "", height: int = 480) -> go.Figur
         ),
         margin=dict(l=55, r=20, t=55, b=50),
         hovermode="x unified",
+        hoverdistance=100,
+        spikedistance=400,
         height=height,
         xaxis=dict(
             gridcolor=THEME["grid"], linecolor=THEME["grid"],
-            tickfont=dict(color=THEME["subtext"]),
+            tickfont=dict(color=THEME["subtext"], family=_TICK_FONT),
             rangeslider=dict(visible=False),
+            showspikes=True,
+            spikecolor=THEME["subtext"], spikethickness=1,
+            spikedash="dot", spikemode="across",
             **tick_cfg,
         ),
         yaxis=dict(
             gridcolor=THEME["grid"], linecolor=THEME["grid"],
-            tickfont=dict(color=THEME["subtext"]),
+            tickfont=dict(color=THEME["subtext"], family=_TICK_FONT),
             ticksuffix="%",
         ),
     )

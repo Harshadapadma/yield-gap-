@@ -31,7 +31,8 @@ _RED   = "#F85149"
 _ORG   = "#F0883E"
 _PURP  = "#D2A8FF"
 _CYAN  = "#00CED1"
-_FONT  = "IBM Plex Mono, monospace"
+_FONT      = "IBM Plex Mono, monospace"
+_TICK_FONT = "Georgia, 'Times New Roman', serif"
 
 _H         = 460
 DATA_START = "2006-01-01"
@@ -242,14 +243,17 @@ def _all_instrument_snapshot(
 # ── Charts ─────────────────────────────────────────────────────────────────────
 
 def _adaptive_xticks(span_years: float) -> tuple[str | int, str, int]:
-    if span_years <= (31 / 365.25):
-        return 86_400_000,     "%d %b",  45
-    elif span_years <= 0.5:
-        return 86_400_000 * 5, "%d %b",  45
-    elif span_years <= 5:
-        return "M1",           "%b '%y", 45
-    else:
-        return "M12",          "%Y",      0
+    _D = 86_400_000
+    if span_years <= (30 / 365.25):       # ≤ 1 month  → every day
+        return _D,      "%d %b", 45
+    elif span_years <= (182 / 365.25):    # 1–6 months → every 3 days
+        return _D * 3,  "%d %b", 45
+    elif span_years <= 1:                 # 6m–1 year  → every month
+        return "M1",    "%b '%y", 45
+    elif span_years <= 7:                 # 1–7 years  → every quarter
+        return "M3",    "%b '%y", 0
+    else:                                 # > 7 years  → every year
+        return "M12",   "%Y",     0
 
 
 def _base_fig(title: str, right_margin: int = 160, span_years: float = 99) -> go.Figure:
@@ -269,16 +273,21 @@ def _base_fig(title: str, right_margin: int = 160, span_years: float = 99) -> go
             xanchor="left", x=0,
             bgcolor="rgba(0,0,0,0)", font=dict(size=10),
         ),
+        hoverdistance=100,
+        spikedistance=400,
         xaxis=dict(
             gridcolor=_GRID, linecolor=_GRID,
-            tickfont=dict(color=_GREY, size=10),
+            tickfont=dict(color=_GREY, size=10, family=_TICK_FONT),
             dtick=dtick, tickformat=tickfmt,
             tickangle=tickangle,
             hoverformat="%d %b %Y",
+            showspikes=True,
+            spikecolor=_GREY, spikethickness=1,
+            spikedash="dot", spikemode="across",
         ),
         yaxis=dict(
             gridcolor=_GRID, linecolor=_GRID,
-            tickfont=dict(color=_GREY), ticksuffix="%",
+            tickfont=dict(color=_GREY, family=_TICK_FONT), ticksuffix="%",
         ),
     )
     return fig
