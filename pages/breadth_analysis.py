@@ -376,7 +376,10 @@ def render_breadth_analysis() -> None:
     if not fetch_btn:
         # Check if we have cached results from a previous run in session
         cached_result = st.session_state.get("breadth_result")
-        if cached_result and cached_result.get("universe") == universe_name \
+        snap = cached_result.get("snapshot_df") if cached_result else None
+        snap_has_price = snap is not None and "Price (₹)" in snap.columns
+        if cached_result and snap_has_price \
+                and cached_result.get("universe") == universe_name \
                 and cached_result.get("benchmark") == benchmark_name \
                 and cached_result.get("window") == window_days:
             _render_results(
@@ -624,7 +627,7 @@ def _render_results(
 
             st.dataframe(
                 disp.style.apply(_color_row, axis=1).format(
-                    {"Return (%)": "{:.2f}", "vs Benchmark": "{:+.2f}"},
+                    {"Price (₹)": "{:,.2f}", "Return (%)": "{:.2f}", "vs Benchmark": "{:+.2f}"},
                 ),
                 use_container_width=True,
                 height=400,
