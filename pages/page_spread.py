@@ -11,6 +11,7 @@ With statistical benchmark lines:
 
 from __future__ import annotations
 
+import hashlib
 from datetime import date, timedelta
 
 import pandas as pd
@@ -507,16 +508,22 @@ def render() -> None:
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
+    _chart_sig = hashlib.md5(
+        f"{ticker_a}|{ticker_b}|{wlabel}|{date_from}|{date_to}".encode()
+    ).hexdigest()[:10]
+
     st.plotly_chart(
         plot_spread_with_bands(spread_view, stats, wlabel, name_a, name_b),
         use_container_width=True,
         config={"responsive": True},
+        key=f"sb_{_chart_sig}",
     )
 
     st.plotly_chart(
         plot_rolling_returns(ra_view, rb_view, wlabel, name_a, name_b),
         use_container_width=True,
         config={"responsive": True},
+        key=f"rr_{_chart_sig}",
     )
 
     with st.expander("📋 Raw data", expanded=False):
