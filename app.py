@@ -164,6 +164,13 @@ st.markdown(
 
 setup_logging()
 
+# ── Background data prefetch (once per Streamlit session) ─────────────────────
+if "prefetch_started" not in st.session_state:
+    st.session_state.prefetch_started = True
+    import threading
+    from data.index_store import prefetch_all_instruments
+    threading.Thread(target=prefetch_all_instruments, daemon=True).start()
+
 
 # ── IST helpers ────────────────────────────────────────────────────────────────
 def _ist_now() -> _dt.datetime:
