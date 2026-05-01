@@ -18,7 +18,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from data.index_store import get_price, get_min_start, INSTRUMENTS, load_cached_price
+from data.index_store import get_price, get_stock_price, get_min_start, INSTRUMENTS, load_cached_price
+from data.nse_stock_list import NSE_STOCKS
 
 # ── Theme ──────────────────────────────────────────────────────────────────────
 _BG    = "#0D1117"
@@ -399,22 +400,92 @@ def render() -> None:
         unsafe_allow_html=True,
     )
 
-    all_names = list(INSTRUMENTS.keys())
+    all_index_names  = list(INSTRUMENTS.keys())
+    all_stock_labels = list(NSE_STOCKS.keys())
+
     cc1, cc2 = st.columns(2)
+
     with cc1:
-        name_a = st.selectbox(
-            "Index A", all_names,
-            index=all_names.index("Nifty 50") if "Nifty 50" in all_names else 0,
-            key="sp_custom_a",
+        st.markdown("**Side A**")
+        type_a = st.radio(
+            "Asset type A", ["Index", "Stock"],
+            horizontal=True, key="sp_type_a",
+            label_visibility="collapsed",
         )
+        if type_a == "Index":
+            idx_a = all_index_names.index("Nifty 50") if "Nifty 50" in all_index_names else 0
+            sel_a = st.selectbox(
+                "Select index", all_index_names, index=idx_a,
+                key="sp_idx_a", label_visibility="collapsed",
+            )
+            name_a     = sel_a
+            ticker_a   = INSTRUMENTS[sel_a]
+            is_stock_a = False
+        else:
+            srch_a = st.text_input(
+                "🔍 Search stock A",
+                placeholder="Type ticker or company name…",
+                key="sp_srch_a",
+                label_visibility="collapsed",
+            )
+            filtered_a = (
+                [l for l in all_stock_labels if srch_a.upper() in l.upper()]
+                if srch_a.strip() else all_stock_labels
+            )
+            if filtered_a:
+                sel_a    = st.selectbox(
+                    "Select stock A", filtered_a,
+                    index=0, key="sp_stk_a", label_visibility="collapsed",
+                )
+                name_a   = sel_a.split(" – ")[0]
+                ticker_a = NSE_STOCKS[sel_a]
+            else:
+                raw_a  = srch_a.strip().upper()
+                st.caption(f"Not in list — using **{raw_a}** as NSE ticker directly.")
+                name_a   = raw_a
+                ticker_a = f"{raw_a}.NS"
+            is_stock_a = True
+
     with cc2:
-        name_b = st.selectbox(
-            "Index B", all_names,
-            index=all_names.index("Gold BeES (Nippon)") if "Gold BeES (Nippon)" in all_names else 1,
-            key="sp_custom_b",
+        st.markdown("**Side B**")
+        type_b = st.radio(
+            "Asset type B", ["Index", "Stock"],
+            horizontal=True, key="sp_type_b",
+            label_visibility="collapsed",
         )
-    ticker_a = INSTRUMENTS[name_a]
-    ticker_b = INSTRUMENTS[name_b]
+        if type_b == "Index":
+            idx_b = all_index_names.index("Gold BeES (Nippon)") if "Gold BeES (Nippon)" in all_index_names else 1
+            sel_b = st.selectbox(
+                "Select index", all_index_names, index=idx_b,
+                key="sp_idx_b", label_visibility="collapsed",
+            )
+            name_b     = sel_b
+            ticker_b   = INSTRUMENTS[sel_b]
+            is_stock_b = False
+        else:
+            srch_b = st.text_input(
+                "🔍 Search stock B",
+                placeholder="Type ticker or company name…",
+                key="sp_srch_b",
+                label_visibility="collapsed",
+            )
+            filtered_b = (
+                [l for l in all_stock_labels if srch_b.upper() in l.upper()]
+                if srch_b.strip() else all_stock_labels
+            )
+            if filtered_b:
+                sel_b    = st.selectbox(
+                    "Select stock B", filtered_b,
+                    index=0, key="sp_stk_b", label_visibility="collapsed",
+                )
+                name_b   = sel_b.split(" – ")[0]
+                ticker_b = NSE_STOCKS[sel_b]
+            else:
+                raw_b  = srch_b.strip().upper()
+                st.caption(f"Not in list — using **{raw_b}** as NSE ticker directly.")
+                name_b   = raw_b
+                ticker_b = f"{raw_b}.NS"
+            is_stock_b = True
 
     st.divider()
 
@@ -435,8 +506,10 @@ def render() -> None:
     date_from, date_to = _date_filter()
 
     with st.spinner(f"Loading {name_a} and {name_b}..."):
-        s_a_raw, status_a = get_price(ticker_a, start_date=DATA_START)
-        s_b_raw, status_b = get_price(ticker_b, start_date=DATA_START)
+        _fetch_a = get_stock_price if is_stock_a else get_price
+        _fetch_b = get_stock_price if is_stock_b else get_price
+        s_a_raw, status_a = _fetch_a(ticker_a, start_date=DATA_START)
+        s_b_raw, status_b = _fetch_b(ticker_b, start_date=DATA_START)
 
     if s_a_raw.empty:
         st.error(f"Could not fetch data for {name_a}.\n\n`{status_a['message']}`")
