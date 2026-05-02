@@ -137,9 +137,10 @@ def _parse_smallcap(text: str) -> float | None:
         close_col = next((c for c in ["Closing Index Value", "ClosingIndexValue"] if c in df.columns), None)
         if not name_col or not close_col:
             return None
-        row = df[df[name_col].str.contains("Smallcap 100", case=False, na=False)]
+        # name changed over time: "CNX Smallcap" (pre-2015) → "NIFTY SMALLCAP 100" (post-2015)
+        row = df[df[name_col].str.contains("Smallcap 100|SMALLCAP 100", case=False, na=False, regex=True)]
         if row.empty:
-            row = df[df[name_col].str.contains("SMALLCAP 100", case=False, na=False)]
+            row = df[df[name_col].str.strip().str.lower() == "cnx smallcap"]
         if row.empty:
             return None
         v = float(str(row.iloc[0][close_col]).replace(",", ""))
@@ -212,7 +213,7 @@ else:
     have_to   = result.index[-1].year if not result.empty else 2010
     fetch_from_year = max(2011, have_to)   # archives start ~2011
 
-    arc_data = fetch_archives_yearly(2011)
+    arc_data = fetch_archives_yearly(2004)
     if not arc_data.empty:
         result = merge(result, arc_data)
         save(result)

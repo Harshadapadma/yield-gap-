@@ -533,6 +533,8 @@ def render() -> None:
 
     ts_from     = pd.Timestamp(date_from)
     ts_to       = pd.Timestamp(date_to)
+    # Respect effective data start — never show empty X-axis space before first real point
+    ts_from     = max(ts_from, spread_full.index[0])
     spread_view = spread_full[(spread_full.index >= ts_from) & (spread_full.index <= ts_to)]
     ra_view     = ra_full[(ra_full.index >= ts_from) & (ra_full.index <= ts_to)]
     rb_view     = rb_full[(rb_full.index >= ts_from) & (rb_full.index <= ts_to)]

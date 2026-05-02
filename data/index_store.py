@@ -1035,6 +1035,17 @@ def get_price(
             status["source"] = "local seed"
 
     # ── Route ────────────────────────────────────────────────────────────────
+    # ^CNXSC: Yahoo Finance has no historical data for this ticker.
+    # Always serve from the locally maintained CSV (rebuilt via fetch_smallcap.py / refetch_all.py).
+    if ticker == "^CNXSC":
+        if not cached.empty:
+            status["source"]  = "cache"
+            status["message"] = (f"Cached {len(cached)} rows "
+                                 f"({cached.index[0].date()} → {cached.index[-1].date()})")
+            return cached[cached.index >= pd.Timestamp(start_date)], status
+        return cached, {**status, "success": False,
+                        "message": "No cached data for Nifty Smallcap 100. Run fetch_smallcap.py to rebuild."}
+
     if ticker in _NSE_HIST_API_PRIMARY:
         return _get_nse_hist_api_price(
             ticker=ticker, start_date=start_date, force_refresh=force_refresh,
