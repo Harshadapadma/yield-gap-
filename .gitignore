@@ -1,7 +1,7 @@
 venv/
 __pycache__/
 *.pyc
-data/
+
 *.pdf
 *.csv
 *.xlsx

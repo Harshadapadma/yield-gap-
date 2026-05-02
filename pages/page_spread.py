@@ -114,9 +114,11 @@ def _compute_spread(
     ticker_b: str,
     window: int,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
-    min_a = pd.Timestamp(get_min_start(ticker_a))
-    min_b = pd.Timestamp(get_min_start(ticker_b))
-    effective_start = max(min_a, min_b)
+    first_a = s_a.first_valid_index()
+    first_b = s_b.first_valid_index()
+    if first_a is None or first_b is None:
+        return pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
+    effective_start = max(first_a, first_b)
 
     s_a = s_a[s_a.index >= effective_start]
     s_b = s_b[s_b.index >= effective_start]
