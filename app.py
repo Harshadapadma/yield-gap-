@@ -31,9 +31,6 @@ if _HERE_STR in sys.path:
     sys.path.remove(_HERE_STR)
 sys.path.insert(0, _HERE_STR)
 
-for _pkg in list(sys.modules.keys()):
-    if _pkg.split(".")[0] in {"components", "utils", "data", "pages"}:
-        del sys.modules[_pkg]
 
 import datetime as _dt
 import streamlit as st
@@ -257,16 +254,11 @@ with st.sidebar:
 
     # ── Page-specific sidebar controls ────────────────────────────────────────
     if active_page == "yield_gap":
-        # Fetch live PE for the number_input default
         try:
             from data.fetcher import fetch_pe_ratio
-            fetched_pe, _ = fetch_pe_ratio()
+            pe_ratio, _ = fetch_pe_ratio()
         except Exception:
-            fetched_pe = 21.27
-
-        from components.sidebar import render_sidebar
-        params = render_sidebar(fetched_pe=fetched_pe)
-        pe_ratio = params["pe_ratio"]
+            pe_ratio = 21.27
 
     elif active_page == "spread":
         st.caption("Rolling return diff between any two instruments.")

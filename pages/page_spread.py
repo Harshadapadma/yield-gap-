@@ -37,7 +37,7 @@ _FONT      = "IBM Plex Mono, monospace"
 _TICK_FONT = "Georgia, 'Times New Roman', serif"
 
 _H         = 460
-DATA_START = "2006-01-01"
+DATA_START = "2000-01-01"
 
 
 # ── Date filter ────────────────────────────────────────────────────────────────
@@ -126,6 +126,9 @@ def _compute_spread(
     common = s_a.index.intersection(s_b.index)
     s_a = s_a.reindex(common)
     s_b = s_b.reindex(common)
+
+    s_a = _null_gap_boundaries(s_a)
+    s_b = _null_gap_boundaries(s_b)
 
     ra = _rolling_return(s_a, window)
     rb = _rolling_return(s_b, window)

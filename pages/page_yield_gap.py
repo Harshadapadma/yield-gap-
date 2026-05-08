@@ -155,10 +155,7 @@ def render(pe_ratio: float = 22.0) -> None:
         )
     with c4:
         st.metric("📊 1Y Avg Gap", f"{avg:+.3f}%")
-    with c5:
-        pct = float((df_full["yield_gap"] < gap).mean() * 100)
-        st.metric("📐 Hist. %ile", f"{pct:.0f}th")
-
+    
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
     # ── Range filter bar ───────────────────────────────────────────────────────
@@ -198,7 +195,7 @@ def render(pe_ratio: float = 22.0) -> None:
         return
 
     # ── Chart options from sidebar ─────────────────────────────────────────────
-    show_components = st.session_state.get("show_components", True)
+    show_components = st.session_state.get("show_components", False)
     show_ma         = st.session_state.get("show_ma", True)
     ref_lines = [
         st.session_state.get("ref1",  1.0),

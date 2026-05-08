@@ -69,9 +69,21 @@ _YF_FETCH_TICKER: dict[str, str] = {
     # ^CNXSC is the direct Yahoo Finance symbol for Nifty Smallcap 100
 }
 
-# NSE historical indices API: ticker → indexType query param
+# NSE archive index name for each ticker (used for archive fallback when yfinance fails/bad)
 _NSE_HIST_INDEX_TYPE: dict[str, str] = {
-    "^CNXSC": "NIFTY SMALLCAP 100",
+    "^CNXSC":              "NIFTY SMALLCAP 100",
+    "NIFTY500":            "NIFTY 500",
+    "NIFTYNEXT50":         "NIFTY NEXT 50",
+    "NIFTY_MIDCAP_100.NS": "NIFTY MIDCAP 100",
+    "^NSEI":               "NIFTY 50",
+    "^NSEBANK":            "NIFTY BANK",
+    "^CNXIT":              "NIFTY IT",
+    "^CNXPHARMA":          "NIFTY PHARMA",
+    "^CNXAUTO":            "NIFTY AUTO",
+    "^CNXFMCG":            "NIFTY FMCG",
+    "^CNXMETAL":           "NIFTY METAL",
+    "^CNXENERGY":          "NIFTY ENERGY",
+    "^CNXREALTY":          "NIFTY REALTY",
 }
 
 # ── Instrument catalogue ──────────────────────────────────────────────────────
@@ -195,6 +207,27 @@ def _safe_fname(ticker: str) -> str:
 
 def _csv_path(ticker: str) -> Path:
     return _IDX_DIR / f"{_safe_fname(ticker)}.csv"
+
+
+def _fetch_start_path(ticker: str) -> Path:
+    return _IDX_DIR / f"{_safe_fname(ticker)}.fetchstart"
+
+
+def _get_fetch_start(ticker: str) -> str | None:
+    """Return the start date used in the last full fetch, or None if unknown."""
+    p = _fetch_start_path(ticker)
+    try:
+        return p.read_text().strip() if p.exists() else None
+    except Exception:
+        return None
+
+
+def _set_fetch_start(ticker: str, start_date: str) -> None:
+    """Record that we did a full fetch from start_date for this ticker."""
+    try:
+        _fetch_start_path(ticker).write_text(start_date)
+    except Exception:
+        pass
 
 
 def _csv_is_fresh(path: Path) -> bool:
@@ -558,6 +591,39 @@ def _get_nse_hist_api_price(
 
 # ── NSE Equity Historical API ─────────────────────────────────────────────────
 
+def _fetch_stock_full(ticker: str) -> pd.Series:
+    """
+    Fetch complete price history for an NSE stock via yfinance.
+    Tries period='max' first (single call, all available history),
+    then falls back to year-by-year download from 2000.
+    """
+    def _clean(raw) -> pd.Series:
+        if raw is None or (hasattr(raw, "empty") and raw.empty):
+            return pd.Series(dtype=float)
+        if isinstance(raw, pd.DataFrame):
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw = raw["Close"].iloc[:, 0]
+            else:
+                raw = raw["Close"] if "Close" in raw.columns else raw.iloc[:, 0]
+        s = raw.dropna().squeeze()
+        if not isinstance(s, pd.Series):
+            return pd.Series(dtype=float)
+        s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+        return s[~s.index.duplicated(keep="last")].sort_index()
+
+    # Try period="max" — gets all available history in one call
+    try:
+        h = yf.Ticker(ticker).history(period="max", auto_adjust=True)
+        s = _clean(h)
+        if len(s) > 30:
+            return s
+    except Exception:
+        pass
+
+    # Fallback: download from 2000 year-by-year (handles tickers that reject period=max)
+    return _fetch_yfinance(ticker, "2000-01-01", str(date.today() + timedelta(days=1)))
+
+
 def get_stock_price(
     ticker: str,
     start_date: str = "2000-01-01",
@@ -565,8 +631,9 @@ def get_stock_price(
 ) -> tuple[pd.Series, dict]:
     """
     Fetch NSE stock price series for ticker like 'RELIANCE.NS' via yfinance.
-    yfinance carries NSE equity data back to 2006 for most large-cap stocks.
-    Data is cached in data/live/indices/<safe_ticker>.csv and updated incrementally.
+    Full history (period='max') is fetched on first access or when data is stale.
+    Subsequent accesses do incremental updates only.
+    Data is cached in data/live/indices/<safe_ticker>.csv.
     """
     now_ist = _datetime.now(_IST)
     today   = now_ist.date()
@@ -576,17 +643,29 @@ def get_stock_price(
     cached    = _load_csv(path)
     fetch_end = str(today + timedelta(days=1))
 
-    # Full rebuild: no cache, explicit refresh, or cache looks truncated (< 100 rows
-    # while we're requesting years of history — indicates a past partial write).
-    req_start  = date.fromisoformat(start_date)
+    # Full rebuild conditions:
+    #   - no cache, force-refresh, or too few rows
+    #   - data starts >2yr after requested start AND we haven't already done a full
+    #     fetch from this start date (tracked in .fetchstart sidecar to avoid infinite
+    #     re-fetches for stocks simply listed after req_start)
+    req_start            = date.fromisoformat(start_date)
+    last_fetch_start     = _get_fetch_start(ticker)
+    already_full_fetched = (last_fetch_start is not None
+                            and last_fetch_start <= start_date)
     needs_full = (
         force_refresh
         or cached.empty
         or (len(cached) < 100 and (today - req_start).days > 365)
+        or (not cached.empty
+            and cached.index[0].date() > req_start + timedelta(days=730)
+            and not already_full_fetched)
     )
 
     if needs_full:
-        fresh = _fetch_yfinance(ticker, start_date, fetch_end)
+        fresh = _fetch_stock_full(ticker)
+        # Record the attempted start so we don't re-fetch infinitely for stocks
+        # whose actual listing date is after req_start.
+        _set_fetch_start(ticker, start_date)
         if fresh.empty:
             if cached.empty:
                 status["success"] = False
@@ -704,6 +783,23 @@ def _fetch_yfinance(ticker: str, start: str, end: str) -> pd.Series:
         time.sleep(0.1)
 
     if not chunks:
+        # Fallback: Ticker.history() when yf.download() fails (e.g. ^CNXSC, some NSE tickers)
+        try:
+            h = yf.Ticker(yf_sym).history(
+                start=str(start_dt),
+                end=str(end_dt + timedelta(days=1)),
+                auto_adjust=True,
+            )
+            if not h.empty and "Close" in h.columns:
+                s = h["Close"].dropna()
+                s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+                s = s[~s.index.duplicated(keep="last")].sort_index()
+                s.name = ticker
+                if not s.empty:
+                    log.info("Ticker.history fallback for %s: %d rows", yf_sym, len(s))
+                    return s
+        except Exception as exc:
+            log.debug("Ticker.history fallback for %s: %s", yf_sym, exc)
         log.warning("yfinance returned no data for %s (%s → %s)", yf_sym, start, end)
         return pd.Series(dtype=float)
 
@@ -903,7 +999,21 @@ def _get_yfinance_primary_price(
     )
 
     if needs_full:
-        fresh = _fetch_yfinance(ticker, start_date, fetch_end)
+        # Try period="max" first — gets all available history in one call
+        fresh = pd.Series(dtype=float)
+        try:
+            yf_sym = _YF_FETCH_TICKER.get(ticker, ticker)
+            h = yf.Ticker(yf_sym).history(period="max", auto_adjust=True)
+            if not h.empty and "Close" in h.columns:
+                s = h["Close"].dropna()
+                s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+                s = s[~s.index.duplicated(keep="last")].sort_index()
+                if len(s) > 30:
+                    fresh = s
+        except Exception:
+            pass
+        if fresh.empty:
+            fresh = _fetch_yfinance(ticker, start_date, fetch_end)
         if fresh.empty:
             if cached.empty:
                 return cached, {**status, "success": False,
@@ -959,6 +1069,12 @@ def _get_yfinance_primary_price(
         else:
             fetch_start = max(cached.index[0].date(), last_cached - timedelta(days=10))
             fresh = _fetch_yfinance(ticker, str(fetch_start), fetch_end)
+            if fresh.empty:
+                _arc_type = _NSE_HIST_INDEX_TYPE.get(ticker)
+                if _arc_type:
+                    fresh = _fetch_nse_archive_days(_arc_type, fetch_start, today)
+                    if not fresh.empty:
+                        status["source"] = "NSE daily archives"
             if fresh.empty:
                 combined = cached
                 status["source"]  = "cache"
@@ -1035,16 +1151,6 @@ def get_price(
             status["source"] = "local seed"
 
     # ── Route ────────────────────────────────────────────────────────────────
-    # ^CNXSC: Yahoo Finance has no historical data for this ticker.
-    # Always serve from the locally maintained CSV (rebuilt via fetch_smallcap.py / refetch_all.py).
-    if ticker == "^CNXSC":
-        if not cached.empty:
-            status["source"]  = "cache"
-            status["message"] = (f"Cached {len(cached)} rows "
-                                 f"({cached.index[0].date()} → {cached.index[-1].date()})")
-            return cached[cached.index >= pd.Timestamp(start_date)], status
-        return cached, {**status, "success": False,
-                        "message": "No cached data for Nifty Smallcap 100. Run fetch_smallcap.py to rebuild."}
 
     if ticker in _NSE_HIST_API_PRIMARY:
         return _get_nse_hist_api_price(

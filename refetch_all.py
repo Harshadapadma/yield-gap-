@@ -28,7 +28,7 @@ import pandas as pd
 import yfinance as yf
 try:
     from curl_cffi import requests as cf_requests
-    _CF_SESSION = cf_requests.Session()
+    _CF_SESSION = cf_requests.Session(impersonate="chrome120")
     _HAS_CURL_CFFI = True
 except ImportError:
     _HAS_CURL_CFFI = False
@@ -38,7 +38,7 @@ IDX_DIR = ROOT / "data" / "live" / "indices"
 IDX_DIR.mkdir(parents=True, exist_ok=True)
 
 TODAY        = date.today()
-TARGET_START = date(2006, 1, 1)
+TARGET_START = date(2000, 1, 1)
 
 HDRS = {
     "User-Agent": (
@@ -68,10 +68,15 @@ YF_NSE_INDICES = {
 
 # Yahoo Finance gives TOTAL RETURN INDEX for these — use NSE Archives instead
 ARCHIVE_ONLY_INDICES = {
-    "Nifty Midcap 100":   "^NSMIDCP",    # YF=TRI → use archives
-    "Nifty Smallcap 100": "^CNXSC",      # YF=TRI or broken
+    "Nifty Midcap 100":   "NIFTY_MIDCAP_100.NS",  # app CSV ticker (YF PR series)
+    "Nifty Smallcap 100": "^CNXSC",
     "Nifty Next 50":      "NIFTYNEXT50",
     "Nifty 500":          "NIFTY500",
+}
+# YF TRI tickers used only for the ratio-splice fallback (when niftyindices is down)
+_TRI_YF_TICKERS_OVERRIDE = {
+    "Nifty Midcap 100":   "^NSMIDCP",
+    "Nifty Smallcap 100": "^CNXSC",
 }
 
 # All 13 NSE index canonical names (used in archive CSVs)
@@ -94,19 +99,52 @@ NI_NAMES = {
     "Nifty 500":           "NIFTY 500",
 }
 
+# investing.com instrument IDs for NSE indices (backfill source)
+# These IDs are used by the HistoricalDataAjax endpoint.
+# Fetch: https://www.investing.com/instruments/HistoricalDataAjax  (curr_id=ID)
+INVESTING_IDS = {
+    "Nifty 50":      (17940, "/indices/s-p-cnx-nifty-historical-data"),
+    "Nifty Bank":    (17950, "/indices/bank-nifty-historical-data"),
+    "Nifty IT":      (17955, "/indices/cnx-it-historical-data"),
+    "Nifty Pharma":  (17959, "/indices/cnx-pharma-historical-data"),
+    "Nifty Auto":    (17951, "/indices/cnx-auto-historical-data"),
+    "Nifty FMCG":    (17953, "/indices/cnx-fmcg-historical-data"),
+    "Nifty Metal":   (17957, "/indices/cnx-metal-historical-data"),
+    "Nifty Energy":  (17952, "/indices/cnx-energy-historical-data"),
+    "Nifty Realty":  (17962, "/indices/cnx-realty-historical-data"),
+    "Nifty Midcap 100": (17946, "/indices/cnx-midcap-historical-data"),
+    "Nifty Next 50": (17941, "/indices/cnx-nifty-junior-historical-data"),
+    "Nifty 500":     (17945, "/indices/s-p-cnx-500-historical-data"),
+}
+# Maps investing.com canonical name → app CSV ticker
+INVESTING_TO_APP_TICKER = {
+    "Nifty 50":      "^NSEI",
+    "Nifty Bank":    "^NSEBANK",
+    "Nifty IT":      "^CNXIT",
+    "Nifty Pharma":  "^CNXPHARMA",
+    "Nifty Auto":    "^CNXAUTO",
+    "Nifty FMCG":    "^CNXFMCG",
+    "Nifty Metal":   "^CNXMETAL",
+    "Nifty Energy":  "^CNXENERGY",
+    "Nifty Realty":  "^CNXREALTY",
+    "Nifty Midcap 100": "NIFTY_MIDCAP_100.NS",
+    "Nifty Next 50": "NIFTYNEXT50",
+    "Nifty 500":     "NIFTY500",
+}
+
 # Sensex + global instruments via Yahoo Finance
 GLOBAL_YF = [
-    ("Sensex",                "^BSESN",       "2006-01-01"),
-    ("Gold BeES (Nippon)",    "GOLDBEES.NS",  "2007-04-01"),
-    ("Nifty BeES (Nippon)",   "NIFTYBEES.NS", "2006-01-01"),
-    ("Junior BeES (NNext50)", "JUNIORBEES.NS","2006-01-01"),
-    ("Bank BeES (Nippon)",    "BANKBEES.NS",  "2010-01-01"),
-    ("USD/INR",               "USDINR=X",     "2006-01-01"),
-    ("Gold (USD-Futures)",    "GC=F",         "2006-01-01"),
-    ("Crude Oil (WTI)",       "CL=F",         "2006-01-01"),
-    ("S&P 500",               "^GSPC",        "2006-01-01"),
-    ("NASDAQ 100",            "^NDX",         "2006-01-01"),
-    ("US 10Y Yield",          "^TNX",         "2006-01-01"),
+    ("Sensex",                "^BSESN",       "2000-01-01"),
+    ("Gold BeES (Nippon)",    "GOLDBEES.NS",  "2000-01-01"),
+    ("Nifty BeES (Nippon)",   "NIFTYBEES.NS", "2000-01-01"),
+    ("Junior BeES (NNext50)", "JUNIORBEES.NS","2000-01-01"),
+    ("Bank BeES (Nippon)",    "BANKBEES.NS",  "2000-01-01"),
+    ("USD/INR",               "USDINR=X",     "2000-01-01"),
+    ("Gold (USD-Futures)",    "GC=F",         "2000-01-01"),
+    ("Crude Oil (WTI)",       "CL=F",         "2000-01-01"),
+    ("S&P 500",               "^GSPC",        "2000-01-01"),
+    ("NASDAQ 100",            "^NDX",         "2000-01-01"),
+    ("US 10Y Yield",          "^TNX",         "2000-01-01"),
 ]
 
 # Note: No absolute sanity ranges — they would destroy valid HISTORICAL data.
@@ -188,7 +226,7 @@ def weekdays(start: date, end: date) -> list:
 # SOURCE 1 — Yahoo Finance
 # ══════════════════════════════════════════════════════════════════════════════
 
-def fetch_yf(ticker: str, start: str = "2006-01-01") -> pd.Series:
+def fetch_yf(ticker: str, start: str = "2000-01-01") -> pd.Series:
     def clean(x) -> pd.Series:
         if isinstance(x, pd.DataFrame): x = x.iloc[:,0]
         s = x.dropna().squeeze()
@@ -196,18 +234,17 @@ def fetch_yf(ticker: str, start: str = "2006-01-01") -> pd.Series:
         s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
         return s[~s.index.duplicated(keep="last")]
 
-    # Try history() first — returns the most data
-    for period in ["25y","20y","15y","10y","5y"]:
-        try:
-            h = yf.Ticker(ticker).history(period=period, auto_adjust=True)
-            if not h.empty and "Close" in h.columns:
-                s = clean(h["Close"])
-                if len(s) > 30:
-                    return s
-        except Exception:
-            pass
+    # Try period="max" first — gets all available history in one call
+    try:
+        h = yf.Ticker(ticker).history(period="max", auto_adjust=True)
+        if not h.empty and "Close" in h.columns:
+            s = clean(h["Close"])
+            if len(s) > 30:
+                return s
+    except Exception:
+        pass
 
-    # Fallback: download() with explicit start date
+    # Fallback: download() with explicit start date (handles tickers that reject period=max)
     try:
         df = yf.download(ticker, start=start, progress=False, auto_adjust=True)
         if not df.empty and "Close" in df.columns:
@@ -216,6 +253,110 @@ def fetch_yf(ticker: str, start: str = "2006-01-01") -> pd.Series:
         pass
 
     return pd.Series(dtype=float)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SOURCE 1b — investing.com (pre-YF backfill for NSE indices from ~1996)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _investing_session():
+    """Return a curl_cffi session primed with investing.com cookies."""
+    if not _HAS_CURL_CFFI:
+        return None
+    import curl_cffi.requests as _cfr
+    s = _cfr.Session(impersonate="chrome120")
+    # Visit main page first so Cloudflare challenge is solved
+    s.get("https://www.investing.com", timeout=20)
+    time.sleep(1.0)
+    return s
+
+
+def fetch_investing_range(curr_id: int, page_path: str,
+                          start_dt: date, end_dt: date,
+                          sess=None) -> pd.Series:
+    """
+    Fetch daily closes from investing.com HistoricalDataAjax in one POST request.
+    Returns a Series indexed by pd.Timestamp (normalized), empty on failure.
+    Max ~1500 rows per call; caller should chunk if span > 6 years.
+    """
+    if not _HAS_CURL_CFFI:
+        return pd.Series(dtype=float)
+    if sess is None:
+        sess = _investing_session()
+    if sess is None:
+        return pd.Series(dtype=float)
+
+    from urllib.parse import quote as _q
+    referer = f"https://www.investing.com{page_path}"
+    sess.get(referer, timeout=15)
+    time.sleep(0.6)
+
+    st = start_dt.strftime("%m/%d/%Y")
+    ed = end_dt.strftime("%m/%d/%Y")
+    payload = {
+        "curr_id": str(curr_id),
+        "smlID": "0",
+        "header": "Index",
+        "st_date": st,
+        "end_date": ed,
+        "interval_sec": "Daily",
+        "sort_col": "date",
+        "sort_ord": "ASC",
+        "action": "historical_data",
+    }
+    try:
+        r = sess.post("https://www.investing.com/instruments/HistoricalDataAjax",
+                      data=payload, timeout=30,
+                      headers={"X-Requested-With": "XMLHttpRequest",
+                               "Referer": referer,
+                               "Content-Type": "application/x-www-form-urlencoded",
+                               "Accept": "text/plain, */*; q=0.01"})
+    except Exception as e:
+        log_fn = print
+        log_fn(f"    investing.com request failed: {e}")
+        return pd.Series(dtype=float)
+
+    from bs4 import BeautifulSoup as _BS
+    results: dict = {}
+    for tr in _BS(r.text, "html.parser").select("#curr_table tbody tr"):
+        tds = tr.find_all("td")
+        if len(tds) >= 2:
+            try:
+                ts  = pd.Timestamp(tds[0].get_text(strip=True)).normalize()
+                val = float(tds[1].get_text(strip=True).replace(",", ""))
+                if val > 0:
+                    results[ts] = val
+            except Exception:
+                pass
+    return pd.Series(results).sort_index() if results else pd.Series(dtype=float)
+
+
+def fetch_investing_full(name: str, start_dt: date, end_dt: date,
+                         sess=None) -> pd.Series:
+    """
+    Fetch full date range from investing.com in 6-year chunks (API cap ~1500 rows).
+    Falls back to empty Series if instrument not in INVESTING_IDS.
+    """
+    entry = INVESTING_IDS.get(name)
+    if not entry:
+        return pd.Series(dtype=float)
+    curr_id, page_path = entry
+
+    chunks: list[pd.Series] = []
+    chunk_start = start_dt
+    while chunk_start <= end_dt:
+        chunk_end = min(date(chunk_start.year + 6, chunk_start.month, chunk_start.day) - timedelta(days=1),
+                        end_dt)
+        s = fetch_investing_range(curr_id, page_path, chunk_start, chunk_end, sess=sess)
+        if not s.empty:
+            chunks.append(s)
+        chunk_start = chunk_end + timedelta(days=1)
+        time.sleep(0.4)
+
+    if not chunks:
+        return pd.Series(dtype=float)
+    combined = pd.concat(chunks).sort_index()
+    return combined[~combined.index.duplicated(keep="last")]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -276,7 +417,7 @@ def _fetch_archive_day(d: date) -> tuple[date, dict]:
     # Try curl_cffi Chrome impersonation first
     if _HAS_CURL_CFFI:
         try:
-            r = _CF_SESSION.get(url, impersonate="chrome", headers=hdrs, timeout=15)
+            r = _CF_SESSION.get(url, impersonate="chrome120", headers=hdrs, timeout=15)
             if r.status_code == 200 and "Index" in r.text:
                 return d, parse_archive_day(r.text)
         except Exception:
@@ -494,11 +635,11 @@ def _get_nse_session():
         if _HAS_CURL_CFFI:
             import curl_cffi.requests as _cfr
             sess = _cfr.Session()
-            sess.get("https://www.nseindia.com", impersonate="chrome",
+            sess.get("https://www.nseindia.com", impersonate="chrome120",
                      headers=HDRS, timeout=20)
             time.sleep(2)
             sess.get("https://www.nseindia.com/market-data/live-equity-market",
-                     impersonate="chrome", headers=HDRS, timeout=15)
+                     impersonate="chrome120", headers=HDRS, timeout=15)
             time.sleep(1)
         else:
             sess = requests.Session()
@@ -534,7 +675,7 @@ def _fetch_nse_api_month(name: str, start: date, end: date) -> pd.Series:
     for attempt in range(3):
         try:
             if _HAS_CURL_CFFI:
-                r = sess.get(url, impersonate="chrome", headers=api_hdrs, timeout=20)
+                r = sess.get(url, impersonate="chrome120", headers=api_hdrs, timeout=20)
             else:
                 r = sess.get(url, headers=api_hdrs, timeout=20)
 
@@ -794,31 +935,42 @@ def update_bond_yield():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-archives", action="store_true",
+                        help="Skip step 2 (NSE archive day-by-day fetch) — use when archives "
+                             "are already up to date and you only need niftyindices backfill + global update")
+    args, _ = parser.parse_known_args()
+
     sep = "=" * 70
     print(sep)
     print("  Data Refetch — Yahoo Finance primary, NSE Archives for Midcap/etc.")
     print(f"  Target: {TARGET_START} → {TODAY}")
+    if args.skip_archives:
+        print("  Mode: --skip-archives (steps 1, 3, 4 only)")
     print(sep)
 
     # ── Step 1: Yahoo Finance NSE indices ──────────────────────────────────
     print("\n[1/4] Fetching NSE indices via Yahoo Finance ...")
 
-    # Only re-fetch tickers that are missing today's data (incremental)
-    today_ts = pd.Timestamp(TODAY)
+    # Re-fetch tickers that are: missing today's data (>5 days stale) OR start too late
+    today_ts    = pd.Timestamp(TODAY)
+    target_ts   = pd.Timestamp(TARGET_START)
     stale = {name: ticker for name, ticker in YF_NSE_INDICES.items()
              if (ex := load_csv(ticker)).empty
-             or ex.index[-1] < today_ts - pd.Timedelta(days=5)}  # >5 days stale
+             or ex.index[-1] < today_ts - pd.Timedelta(days=5)
+             or ex.index[0] > target_ts + pd.Timedelta(days=365 * 3)}  # starts >3yr after target
 
     if not stale:
         print("  All YF indices already up to date ✓")
         yf_results = {name: load_csv(ticker) for name, ticker in YF_NSE_INDICES.items()}
     else:
-        print(f"  Fetching {len(stale)} stale tickers (parallel) ...")
+        print(f"  Fetching {len(stale)} stale/early-start tickers (parallel) ...")
         yf_results = {name: load_csv(ticker) for name, ticker in YF_NSE_INDICES.items()}
 
         def _fetch_one_yf(name_ticker):
             name, ticker = name_ticker
-            s = fetch_yf(ticker)
+            s = fetch_yf(ticker, start="2000-01-01")
             return name, ticker, s
 
         with ThreadPoolExecutor(max_workers=6) as ex_pool:
@@ -837,99 +989,94 @@ def main():
                     print(f"  ❌  {name:22s}  {ticker:15s}  no data from Yahoo Finance")
 
     # ── Step 2: NSE Archives for Midcap / Smallcap / Next50 / Nifty500 ───
-    print("\n[2/4] NSE Archives → Midcap 100, Smallcap 100, Next 50, Nifty 500 ...")
-    arc_start = probe_archive_start()
-    print(f"  Archives available from: {arc_start}")
-
-    # ── 2a: Forward fill (incremental update to today) ────────────────────
-    # Only fetch dates newer than what we already have — fast incremental update.
-    latest_existing: dict[str, date] = {}
-    for name, ticker in ARCHIVE_ONLY_INDICES.items():
-        existing = load_csv(ticker)
-        if existing.empty:
-            latest_existing[name] = arc_start - timedelta(days=1)
-        else:
-            latest_existing[name] = existing.index[-1].date()
-
-    min_last   = min(latest_existing.values())
-    fetch_from = max(arc_start, min_last - timedelta(days=7))
-    fetch_to   = TODAY
-
-    days_to_fetch = len(weekdays(fetch_from, fetch_to))
-    if days_to_fetch == 0:
-        print(f"  All indices up to date ({fetch_to})")
+    if args.skip_archives:
+        print("\n[2/4] NSE Archives — SKIPPED (--skip-archives)")
     else:
-        print(f"  Fetching {days_to_fetch} trading days ({fetch_from} → {fetch_to}) ...")
-        arc_data = fetch_archive_range(
-            start=fetch_from,
-            end=fetch_to,
-            names=set(ARCHIVE_ONLY_INDICES.keys()),
-        )
+        print("\n[2/4] NSE Archives → Midcap 100, Smallcap 100, Next 50, Nifty 500 ...")
+        arc_start = probe_archive_start()
+        print(f"  Archives available from: {arc_start}")
+
+        # ── 2a: Forward fill (incremental update to today) ────────────────────
+        latest_existing: dict[str, date] = {}
         for name, ticker in ARCHIVE_ONLY_INDICES.items():
-            new_data = arc_data.get(name, {})
-            if new_data:
-                new_s = pd.Series(new_data).sort_index()
-                new_s = validate_series(new_s, name)
-                existing = load_csv(ticker)
-                merged = merge(existing, new_s)
-                save_csv(merged, ticker)
-                span = f"{merged.index[0].date()} → {merged.index[-1].date()}"
-                print(f"  ✅  {name:22s}  {span}  ({len(merged)} rows)")
+            existing = load_csv(ticker)
+            if existing.empty:
+                latest_existing[name] = arc_start - timedelta(days=1)
             else:
-                print(f"  ⚠️  {name:22s}  0 new rows (may already be up to date)")
+                latest_existing[name] = existing.index[-1].date()
 
-    # ── 2b: Backward fill (archive-only indices that don't reach arc_start) ─
-    # Indices like Next50 / Nifty500 currently start 2013; archives go to 2011.
-    # Fetch arc_start → each index's current earliest date so archives fill the gap.
-    backward_needed = {
-        name: ticker for name, ticker in ARCHIVE_ONLY_INDICES.items()
-        if (ex := load_csv(ticker)) is not None
-        and not ex.empty
-        and ex.index[0].date() > arc_start + timedelta(days=30)
-    }
-    if backward_needed:
-        print(f"\n  Backward fill: {len(backward_needed)} indices need data before "
-              f"{list(backward_needed.keys())[0]}'s current start ...")
-        # Find the overall earliest start we need to reach
-        earliest_starts = {name: load_csv(ticker).index[0].date()
-                           for name, ticker in backward_needed.items()}
-        back_to = arc_start
-        back_end = max(earliest_starts.values())  # fetch up to the latest "early start"
+        min_last   = min(latest_existing.values())
+        fetch_from = max(arc_start, min_last - timedelta(days=7))
+        fetch_to   = TODAY
 
-        days_back = len(weekdays(back_to, back_end))
-        print(f"  Fetching {days_back} trading days ({back_to} → {back_end}) ...")
-        arc_back = fetch_archive_range(
-            start=back_to,
-            end=back_end,
-            names=set(backward_needed.keys()),
-        )
-        for name, ticker in backward_needed.items():
-            new_data = arc_back.get(name, {})
-            if new_data:
-                new_s = pd.Series(new_data).sort_index()
-                new_s = validate_series(new_s, name)
-                existing = load_csv(ticker)
-                merged = merge(new_s, existing)   # new_s fills early gap
-                save_csv(merged, ticker)
-                span = f"{merged.index[0].date()} → {merged.index[-1].date()}"
-                print(f"  ✅  {name:22s}  {span}  ({len(merged)} rows)")
-            else:
-                print(f"  ⚠️  {name:22s}  0 rows from backward fill")
+        days_to_fetch = len(weekdays(fetch_from, fetch_to))
+        if days_to_fetch == 0:
+            print(f"  All indices up to date ({fetch_to})")
+        else:
+            print(f"  Fetching {days_to_fetch} trading days ({fetch_from} → {fetch_to}) ...")
+            arc_data = fetch_archive_range(
+                start=fetch_from,
+                end=fetch_to,
+                names=set(ARCHIVE_ONLY_INDICES.keys()),
+            )
+            for name, ticker in ARCHIVE_ONLY_INDICES.items():
+                new_data = arc_data.get(name, {})
+                if new_data:
+                    new_s = pd.Series(new_data).sort_index()
+                    new_s = validate_series(new_s, name)
+                    existing = load_csv(ticker)
+                    merged = merge(existing, new_s)
+                    save_csv(merged, ticker)
+                    span = f"{merged.index[0].date()} → {merged.index[-1].date()}"
+                    print(f"  ✅  {name:22s}  {span}  ({len(merged)} rows)")
+                else:
+                    print(f"  ⚠️  {name:22s}  0 new rows (may already be up to date)")
 
-    # ── Step 2b: Fill internal gaps using NSE indicesHistory API ─────────
-    # NSE archive fetches can be rate-blocked, leaving multi-month holes.
-    # Use the NSE website indicesHistory API (monthly chunks) to fill gaps.
-    # This returns correct PRICE RETURN data (not TRI).
-    print("\n  Checking for internal gaps in archive-only indices ...")
-    # Check ALL archive-only indices for gaps — API works for all of them
-    _GAP_INDICES = {
-        "Nifty Midcap 100":   "^NSMIDCP",
-        "Nifty Smallcap 100": "^CNXSC",
-        "Nifty Next 50":      "NIFTYNEXT50",
-        "Nifty 500":          "NIFTY500",
-    }
-    for name, csv_ticker in _GAP_INDICES.items():
-        fill_internal_gaps(csv_ticker, None, name, min_gap_days=10)
+        # ── 2b: Backward fill (archive-only indices that don't reach arc_start) ─
+        backward_needed = {
+            name: ticker for name, ticker in ARCHIVE_ONLY_INDICES.items()
+            if (ex := load_csv(ticker)) is not None
+            and not ex.empty
+            and ex.index[0].date() > arc_start + timedelta(days=30)
+        }
+        if backward_needed:
+            print(f"\n  Backward fill: {len(backward_needed)} indices need data before "
+                  f"{list(backward_needed.keys())[0]}'s current start ...")
+            earliest_starts = {name: load_csv(ticker).index[0].date()
+                               for name, ticker in backward_needed.items()}
+            back_to  = arc_start
+            back_end = max(earliest_starts.values())
+
+            days_back = len(weekdays(back_to, back_end))
+            print(f"  Fetching {days_back} trading days ({back_to} → {back_end}) ...")
+            arc_back = fetch_archive_range(
+                start=back_to,
+                end=back_end,
+                names=set(backward_needed.keys()),
+            )
+            for name, ticker in backward_needed.items():
+                new_data = arc_back.get(name, {})
+                if new_data:
+                    new_s = pd.Series(new_data).sort_index()
+                    new_s = validate_series(new_s, name)
+                    existing = load_csv(ticker)
+                    merged = merge(new_s, existing)
+                    save_csv(merged, ticker)
+                    span = f"{merged.index[0].date()} → {merged.index[-1].date()}"
+                    print(f"  ✅  {name:22s}  {span}  ({len(merged)} rows)")
+                else:
+                    print(f"  ⚠️  {name:22s}  0 rows from backward fill")
+
+        # ── Step 2b: Fill internal gaps ───────────────────────────────────────
+        print("\n  Checking for internal gaps in archive-only indices ...")
+        _GAP_INDICES = {
+            "Nifty Midcap 100":   "NIFTY_MIDCAP_100.NS",
+            "Nifty Smallcap 100": "^CNXSC",
+            "Nifty Next 50":      "NIFTYNEXT50",
+            "Nifty 500":          "NIFTY500",
+        }
+        for name, csv_ticker in _GAP_INDICES.items():
+            fill_internal_gaps(csv_ticker, None, name, min_gap_days=10)
 
     # ── Step 3: niftyindices.com backfill ────────────────────────────────
     # niftyindices.com has data from index inception back to 2000+.
@@ -946,15 +1093,15 @@ def main():
         for name, ticker in ALL_NSE.items():
             existing = load_csv(ticker)
             earliest = existing.index[0].date() if not existing.empty else TODAY
-            if earliest <= TARGET_START:
+            if earliest <= TARGET_START + timedelta(days=365):
                 print(f"  {name}: already starts {earliest} ✓ skip")
                 continue
-            # Fetch from 2006-01-01 right up to the day before earliest known data
-            # (slight overlap is fine — merge keeps existing data for overlapping dates)
+            # Fetch from inception (1996-01-01 to catch all available data)
+            # right up to current earliest + 30 days overlap
             fetch_end = min(earliest + timedelta(days=30), TODAY)
-            print(f"  {name}: backfilling {TARGET_START} → {fetch_end} "
+            print(f"  {name}: backfilling 1996-01-01 → {fetch_end} "
                   f"(currently starts {earliest}) ...")
-            ni_data = fetch_niftyindices(name, "2006-01-01", fetch_end.strftime("%Y-%m-%d"))
+            ni_data = fetch_niftyindices(name, "1996-01-01", fetch_end.strftime("%Y-%m-%d"))
             if not ni_data.empty:
                 ni_data = validate_series(ni_data, name)
                 # Existing archive/YF data takes precedence for any overlap
@@ -993,10 +1140,7 @@ def main():
         # elevated (~dividend yield ≈ 1-2%/yr) compared to true PR returns.
         # Once niftyindices.com is reachable, run refetch_all.py again to replace
         # with exact PR data.
-        _TRI_YF_TICKERS = {
-            "Nifty Midcap 100":   "^NSMIDCP",
-            "Nifty Smallcap 100": "^CNXSC",
-        }
+        _TRI_YF_TICKERS = _TRI_YF_TICKERS_OVERRIDE
         print("\n  [Fallback B] Ratio-splice: YF TRI → scaled PR for Midcap/Smallcap ...")
         for name, yf_ticker in _TRI_YF_TICKERS.items():
             csv_ticker = ARCHIVE_ONLY_INDICES[name]
@@ -1038,6 +1182,48 @@ def main():
             print(f"    ✅  {name}: {merged.index[0].date()} → {merged.index[-1].date()}  "
                   f"({len(merged)} rows, scale={scale:.4f}, "
                   f"pre-archive rows={len(scaled)} [~TRI-adjusted])")
+
+    # ── Step 3b: investing.com backfill (niftyindices fallback + extra history) ─
+    # Use investing.com to backfill NSE indices where YF data starts too late.
+    # investing.com has Nifty 50 from 1996, Nifty IT from 2003, Next50 from 2001.
+    print(f"\n[3b] investing.com backfill ...")
+    if not _HAS_CURL_CFFI:
+        print("  Skipping — curl_cffi not installed")
+    else:
+        inv_sess = _investing_session()
+        for name, app_ticker in INVESTING_TO_APP_TICKER.items():
+            existing = load_csv(app_ticker)
+            earliest = existing.index[0].date() if not existing.empty else TODAY
+            if earliest <= TARGET_START + timedelta(days=365):
+                print(f"  {name}: already starts {earliest} ✓")
+                continue
+            # Fetch from 1996 up to current earliest + 30 day overlap
+            fetch_end = min(earliest + timedelta(days=30), TODAY)
+            print(f"  {name}: backfilling 1996-01-01 → {fetch_end} (currently starts {earliest}) ...")
+            inv_data = fetch_investing_full(name, date(1996, 1, 1), fetch_end, sess=inv_sess)
+            if inv_data.empty:
+                print(f"    no data from investing.com")
+                continue
+            # Scale check: verify overlap with existing data
+            if not existing.empty:
+                overlap = inv_data.index.intersection(existing.index)
+                if len(overlap) >= 3:
+                    ratio = float((existing.loc[overlap] / inv_data.loc[overlap]).mean())
+                    if abs(ratio - 1.0) > 0.05:
+                        print(f"    scale mismatch (ratio={ratio:.3f}) — skipping")
+                        continue
+                pre_only = inv_data[inv_data.index < existing.index[0]]
+                if pre_only.empty:
+                    print(f"    {name}: no earlier data available")
+                    continue
+                merged = merge(pre_only, existing)
+            else:
+                # No existing data — also fetch the rest of history
+                full_inv = fetch_investing_full(name, date(1996, 1, 1), TODAY, sess=inv_sess)
+                merged = full_inv if not full_inv.empty else inv_data
+            save_csv(merged, app_ticker)
+            print(f"    {name}: {merged.index[0].date()} → {merged.index[-1].date()} ({len(merged)} rows)")
+            time.sleep(0.3)
 
     # ── Step 4: Global instruments (Sensex, Gold, Crude, etc.) ───────────
     print("\n[4/4] Fetching global instruments via Yahoo Finance ...")
@@ -1085,7 +1271,7 @@ def main():
         if s.empty:
             print(f"  ❌  {name:30s}  no data")
         else:
-            start_ok = s.index[0].date() <= date(2007, 9, 1)
+            start_ok = s.index[0].date() <= date(2004, 1, 1)
             flag = "OK  " if start_ok else "WARN"
             note = "" if start_ok else f"  (starts {s.index[0].date()})"
             print(f"  {flag}  {name:30s}  {s.index[0].date()} → {s.index[-1].date()}  {len(s)} rows{note}")

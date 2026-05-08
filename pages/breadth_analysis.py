@@ -15,6 +15,8 @@ from data.breadth_fetcher import (
     BENCHMARK_CATALOG,
     UNIVERSE_CATALOG,
     WINDOW_OPTIONS,
+    _after_close,
+    _is_market_hours,
     clear_price_cache,
     compute_breadth_series,
     fetch_prices_batch,
@@ -123,7 +125,7 @@ def plot_breadth_time_series(
         fig.add_trace(go.Scatter(
             x=seg_x, y=seg_y,
             mode="lines",
-            line=dict(color=colors[i], width=1.5),
+            line=dict(color=colors[i], width=2.5),
             showlegend=False,
             hoverinfo="skip",
         ))
@@ -150,8 +152,10 @@ def plot_breadth_time_series(
         ),
     ))
 
-    # Thin 6-period MA (6 months for monthly data)
-    ma = pct.rolling(6).mean()
+    # 6-month MA — always computed on monthly data so it's meaningful
+    # even when pct has been expanded to daily for short ranges
+    _pct_monthly = pct.resample("BME").last().dropna()
+    ma = _pct_monthly.rolling(6).mean()
     fig.add_trace(go.Scatter(
         x=ma.index, y=ma,
         mode="lines", name="6M Moving Avg",
@@ -192,8 +196,8 @@ def plot_breadth_time_series(
             layout["xaxis"].update(dtick="M12",    tickformat="%Y")
         elif n_days > 365:             # 1–7 years   → every quarter
             layout["xaxis"].update(dtick="M3",     tickformat="%b '%y")
-        elif n_days > 182:             # 6m–1 year   → every month
-            layout["xaxis"].update(dtick="M1",     tickformat="%b '%y")
+        elif n_days > 182:             # 6m–1 year   → every 5 days
+            layout["xaxis"].update(dtick=5 * _D,   tickformat="%d %b '%y")
         elif n_days > 30:              # 1–6 months  → every 3 days
             layout["xaxis"].update(dtick=3 * _D,   tickformat="%d %b")
         else:                          # ≤ 1 month   → every day
@@ -400,8 +404,17 @@ def render_breadth_analysis() -> None:
     cached_result = st.session_state.get("breadth_result")
     snap = cached_result.get("snapshot_df") if cached_result else None
     snap_has_price = snap is not None and "Price (₹)" in snap.columns
+    cached_as_of             = cached_result.get("computed_date")           if cached_result else None
+    cached_during_market     = cached_result.get("computed_during_market")  if cached_result else False
+    # Stale if: different day, OR was computed mid-market and market has since closed
+    cache_is_stale = (
+        cached_as_of is None
+        or cached_as_of < today
+        or (cached_during_market and _after_close())
+    )
     has_matching_cache = (
         cached_result and snap_has_price
+        and not cache_is_stale
         and cached_result.get("universe")   == universe_name
         and cached_result.get("benchmark")  == benchmark_name
         and cached_result.get("window")     == window_days
@@ -487,13 +500,15 @@ def render_breadth_analysis() -> None:
 
     # Cache in session state
     st.session_state["breadth_result"] = {
-        "universe":    universe_name,
-        "benchmark":   benchmark_name,
-        "window":      window_days,
-        "breadth_df":  breadth_df,
-        "bench_series": bench_series,
-        "snapshot_df": snapshot_df,
-        "bench_ret":   bench_ret,
+        "universe":               universe_name,
+        "benchmark":              benchmark_name,
+        "window":                 window_days,
+        "breadth_df":             breadth_df,
+        "bench_series":           bench_series,
+        "snapshot_df":            snapshot_df,
+        "bench_ret":              bench_ret,
+        "computed_date":          today,
+        "computed_during_market": _is_market_hours(),
     }
 
     _render_results(
@@ -526,6 +541,21 @@ def _render_results(
         (breadth_df.index.date <= date_to)
     )
     df = breadth_df.loc[mask]
+
+    # Monthly data gives only 1-2 points for short ranges (1M/3M).
+    # Grab the last monthly anchor before date_from and forward-fill to
+    # business-daily so the chart shows a continuous stepped line.
+    if len(df) < 15:
+        lookback = breadth_df.index.date < date_from
+        anchor = breadth_df.loc[lookback].iloc[[-1]] if lookback.any() else pd.DataFrame()
+        combined = pd.concat([anchor, df]) if not anchor.empty else df
+        bdays = pd.bdate_range(date_from, date_to)
+        df = (
+            combined
+            .reindex(combined.index.union(pd.DatetimeIndex(bdays)))
+            .ffill()
+            .loc[lambda x: (x.index.date >= date_from) & (x.index.date <= date_to)]
+        )
 
     if df.empty:
         st.warning("No breadth data for selected date range. Try widening it.")

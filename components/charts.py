@@ -38,9 +38,9 @@ def _x_axis_dtick(df: pd.DataFrame) -> dict:
     n_days = (df.index[-1] - df.index[0]).days
     if n_days > 7 * 365:    # > 7 years  → every year
         return dict(dtick="M12", tickformat="%Y")
-    elif n_days > 365:      # 1–7 years  → every quarter
+    elif n_days > 3 * 365:  # 3–7 years  → every quarter
         return dict(dtick="M3",  tickformat="%b '%y")
-    elif n_days > 182:      # 6m–1 year  → every month
+    elif n_days > 182:      # 6m–3 years → every month
         return dict(dtick="M1",  tickformat="%b '%y")
     elif n_days > 30:       # 1–6 months → every 3 days
         return dict(dtick=3 * _D, tickformat="%d %b")

@@ -14,7 +14,7 @@ DEFAULT_PE = 21.27
 # Bond yield: fully daily from 2006-01-02 (seed CSV).
 # PE:         NSE Archives from 2011-01-03 (earlier dates forward-filled).
 # Nifty price: yfinance ^NSEI from 2000.
-DATA_START_DATE = "2006-01-01"
+DATA_START_DATE = "2000-01-01"
 
 # How long Streamlit caches fetched data before re-fetching (15 min)
 CACHE_TTL_SECONDS = 900

@@ -6,7 +6,8 @@
       "Bash(python -m py_compile pages/breadth_analysis.py)",
       "Bash(python -m py_compile pages/page_spread.py)",
       "Bash(pip install *)",
-      "Bash(python3 -)"
+      "Bash(python3 -)",
+      "Bash(git restore *)"
     ]
   }
 }
