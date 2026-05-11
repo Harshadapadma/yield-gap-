@@ -66,7 +66,9 @@ _NIFTYINDICES_NAME: dict[str, str] = {
 _YF_FETCH_TICKER: dict[str, str] = {
     "NIFTY500":   "^CRSLDX",    # Nifty 500 on Yahoo Finance
     "NIFTYNEXT50": "^NSMIDCP",  # Nifty Next 50 (Junior Nifty) on Yahoo Finance
-    # ^CNXSC is the direct Yahoo Finance symbol for Nifty Smallcap 100
+    # Smallcap 100: Yahoo retired ^CNXSC; ^CNXSMALL is the live alias.
+    # NSE archive fallback ("NIFTY SMALLCAP 100") still works regardless.
+    "^CNXSC":     "^CNXSMALL",
 }
 
 # NSE archive index name for each ticker (used for archive fallback when yfinance fails/bad)
@@ -93,7 +95,7 @@ _INSTRUMENT_DEFS: list[tuple[str, str, str]] = [
     ("Sensex",                "^BSESN",               "2000-01-01"),
     ("Nifty Bank",            "^NSEBANK",             "2000-01-01"),
     ("Nifty Midcap 100",      "NIFTY_MIDCAP_100.NS",  "2000-01-01"),
-    ("Nifty Smallcap 100",    "^CNXSC",               "2012-02-01"),
+    ("Nifty Smallcap 100",    "^CNXSC",               "2005-01-01"),
     ("Nifty IT",              "^CNXIT",               "2000-01-01"),
     ("Nifty Pharma",          "^CNXPHARMA",           "2000-01-01"),
     ("Nifty Auto",            "^CNXAUTO",             "2000-01-01"),
@@ -257,6 +259,117 @@ def _is_market_hours(now_ist: _datetime) -> bool:
     return (9 * 60 + 15) <= mins < (16 * 60)
 
 
+def _strip_price_outliers(s: pd.Series, window: int = 90, max_ratio: float = 2.5) -> pd.Series:
+    """
+    Remove rows whose price is more than max_ratio times (or less than 1/max_ratio of)
+    the trailing rolling median of the previous `window` rows.  This catches multi-day
+    bad-data runs that slip past single-day change checks (e.g. corrupt yfinance rows
+    that are internally consistent with each other but 3× the true index level).
+
+    Also runs a tighter 30-day check (ratio 1.30/0.77) — but ONLY on the last 180
+    days.  This catches the alternating-day cross-ticker contamination that's been
+    appearing in 2025-2026, while leaving historical crash periods (2008 GFC,
+    2020 COVID) intact, because in a real crash the rolling median *follows* the
+    price down so legitimate -40% days don't register as outliers.  The tight
+    check is also gated by a "neighbour-stability" requirement: the row before
+    AND after must be within 8% of each other.  Crashes fail that gate
+    (volatile neighbours) so genuine crash data passes through.
+    """
+    if len(s) < 10:
+        return s
+    s = s.copy().sort_index()
+    # Trailing median: shift(1) so current value is not in its own median
+    trailing_med = s.shift(1).rolling(window, min_periods=5).median()
+    # Bootstrap first few rows with expanding median of prior values
+    exp_med = s.shift(1).expanding(min_periods=3).median()
+    med = trailing_med.where(trailing_med.notna(), exp_med)
+    ratio = s / med.replace(0, float("nan"))
+    bad = (ratio > max_ratio) | (ratio < (1.0 / max_ratio))
+
+    # ── Tight 30-day check, RECENT-WINDOW ONLY ────────────────────────────────
+    # Restrict the aggressive ratio-1.30 check to the last 180 days.  Anywhere
+    # earlier than that in the series we trust the loose `max_ratio` check
+    # only — this preserves real crash days (2008, 2020) that legitimately
+    # diverge from a still-elevated 30-day median.
+    if len(s) >= 30:
+        recent_cutoff = s.index.max() - pd.Timedelta(days=180)
+        recent_mask   = s.index >= recent_cutoff
+        if recent_mask.any():
+            prev_med = s.shift(1).rolling(30, min_periods=5).median()
+            next_med = s.shift(-1).rolling(30, min_periods=5).median()
+            # Use the average of trailing & forward median as anchor
+            tight_med = pd.concat([prev_med, next_med], axis=1).median(axis=1)
+            tight_ratio = s / tight_med.replace(0, float("nan"))
+            bad_tight = ((tight_ratio > 1.30) | (tight_ratio < 0.77))
+            # Stability gate: only flag when the neighbours agree within 8%
+            # (a real crash has *unstable* neighbours so this gate excludes it).
+            try:
+                neighbour_chg = (next_med / prev_med - 1).abs()
+                stable_neighbours = neighbour_chg < 0.08
+                bad_tight = bad_tight & stable_neighbours.fillna(False)
+            except Exception:
+                pass
+            # AND restrict to the recent window — older history is left alone
+            bad_tight = bad_tight & recent_mask
+            bad = bad | bad_tight.fillna(False)
+
+    if bad.any():
+        log.warning(
+            "%s: stripping %d outlier row(s) deviating from rolling median: %s",
+            s.index.name or "series", int(bad.sum()),
+            list(s.index[bad].strftime("%Y-%m-%d"))[:20],
+        )
+        s = s[~bad]
+    return s
+
+
+def _detect_rebase_event(cached: pd.Series, fresh: pd.Series, tol: float = 0.05) -> bool:
+    """
+    Return True if `fresh` looks like the same series as `cached` but rebased
+    (e.g. split, dividend re-adjust). Compares values on overlapping dates.
+    A re-adjustment is detected when:
+      - At least 5 overlapping dates exist
+      - >40% of overlapping rows differ by >tol (5% by default)
+      - The ratio (fresh / cached) is consistent across overlap (low CoV)
+    Caller should respond by replacing the cached series with the fresh one
+    fully (ignore the cache) so the merged series is internally consistent.
+    """
+    if cached.empty or fresh.empty:
+        return False
+    overlap = cached.index.intersection(fresh.index)
+    if len(overlap) < 5:
+        return False
+    a = cached.reindex(overlap).astype(float)
+    b = fresh.reindex(overlap).astype(float)
+    valid = (a > 0) & (b > 0) & a.notna() & b.notna()
+    a, b = a[valid], b[valid]
+    if len(a) < 5:
+        return False
+    ratio = b / a
+    diff_pct = (ratio - 1).abs()
+    pct_changed = float((diff_pct > tol).mean())
+    if pct_changed < 0.40:
+        return False
+    # Consistent ratio across overlap → corporate-action re-adjustment
+    cov = float(ratio.std() / ratio.mean()) if ratio.mean() != 0 else 1.0
+    if cov < 0.10:
+        log.warning(
+            "Rebase detected: %d/%d overlap rows differ >%.0f%% with consistent ratio "
+            "%.3f (CoV %.3f) — replacing cache",
+            int((diff_pct > tol).sum()), len(a), tol * 100, float(ratio.mean()), cov,
+        )
+        return True
+    # Even without a consistent ratio, if MOST overlap rows differ wildly,
+    # the cache is corrupted and should be discarded.
+    if pct_changed > 0.60:
+        log.warning(
+            "Cache corruption suspected: %d/%d overlap rows differ >%.0f%% — replacing cache",
+            int((diff_pct > tol).sum()), len(a), tol * 100,
+        )
+        return True
+    return False
+
+
 def _load_csv(path: Path) -> pd.Series:
     if not path.exists() or path.stat().st_size == 0:
         return pd.Series(dtype=float)
@@ -265,13 +378,26 @@ def _load_csv(path: Path) -> pd.Series:
         df = df.dropna(subset=["date", "close"])
         s  = df.set_index("date")["close"].sort_index()
         s.index = pd.to_datetime(s.index).normalize()
-        return s[~s.index.duplicated(keep="last")]
+        s = s[~s.index.duplicated(keep="last")]
+        # Use stricter ratio for index files — indices never legitimately move 80%+ from
+        # their 90-day trailing median in a single batch (circuit breakers cap daily moves).
+        max_ratio = 1.8 if path.parent == _IDX_DIR else 2.5
+        s = _strip_price_outliers(s, max_ratio=max_ratio)
+        # Auto-repair stock-split rebases on load.  When yfinance's auto-adjust missed
+        # a split (e.g. GOLDBEES 1:3 on 2026-04-28), the cached CSV has a single huge
+        # day-over-day jump.  This rescales the pre-split history so the series is
+        # internally consistent, which prevents the rolling-return calc from showing
+        # spurious ±300% spikes in the Return Spread chart.
+        s = _fix_consolidation_spikes(s)
+        return s
     except Exception as exc:
         log.warning("Could not load %s: %s", path.name, exc)
         return pd.Series(dtype=float)
 
 
 def _save_csv(s: pd.Series, path: Path) -> None:
+    max_ratio = 1.8 if path.parent == _IDX_DIR else 2.5
+    s = _strip_price_outliers(s.sort_index(), max_ratio=max_ratio)
     df = s.reset_index()
     df.columns = ["date", "close"]
     df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
@@ -293,19 +419,38 @@ def _drop_bad_first_row(s: pd.Series, max_day1_move: float = 0.10) -> pd.Series:
     return s
 
 
-def _fix_consolidation_spikes(s: pd.Series, max_ratio: float = 5.0) -> pd.Series:
+def _fix_consolidation_spikes(s: pd.Series, max_ratio: float = 2.5) -> pd.Series:
+    """
+    Detect single-day price moves that look like a stock-split rebase and
+    multiply the entire pre-event history by the inverse ratio so the series
+    becomes internally consistent.
+
+    Default max_ratio=2.5 catches:
+      • 1:2  splits  (drop to 50%)        → ratio 0.50
+      • 1:3  splits  (drop to 33%)        → ratio 0.33  ← GOLDBEES 2026-04-28
+      • 1:5  splits, 1:8 splits, etc.
+      • Reverse splits (consolidations) symmetrically.
+
+    The conservative threshold (2.5) is fine because circuit breakers cap any
+    legitimate single-day move on Indian/US markets at well under that.
+    Sustained legitimate moves (say a multi-day trend) never show as a single-day
+    ratio jump, so they're not affected.
+    """
     if s.empty or len(s) < 2:
         return s
     s = s.copy().sort_index()
     ratio = s / s.shift(1)
-    for spike_date in s.index[ratio > max_ratio]:
-        factor = ratio.loc[spike_date]
-        s.loc[s.index < spike_date] *= factor
-        log.info("Spike correction ×%.1f before %s", factor, spike_date.date())
+    # Forward splits (price drops sharply) — ratio < 1/max_ratio
     for spike_date in s.index[ratio < (1 / max_ratio)]:
         factor = ratio.loc[spike_date]
         s.loc[s.index < spike_date] *= factor
-        log.info("Spike correction ×%.4f before %s", factor, spike_date.date())
+        log.info("Split-adjust ×%.4f before %s (ratio %.3f)",
+                 factor, spike_date.date(), factor)
+    # Reverse splits (price jumps sharply) — ratio > max_ratio
+    for spike_date in s.index[ratio > max_ratio]:
+        factor = ratio.loc[spike_date]
+        s.loc[s.index < spike_date] *= factor
+        log.info("Reverse-split-adjust ×%.1f before %s", factor, spike_date.date())
     return s
 
 
@@ -810,10 +955,28 @@ def _fetch_yfinance(ticker: str, start: str, end: str) -> pd.Series:
 
 
 def _fetch_yfinance_latest_quote(ticker: str) -> pd.Series:
+    """
+    Fetch the latest live quote.  Validates that the returned info actually
+    matches the requested symbol — yfinance's .info has been observed to
+    return cached data for a *different* symbol when called concurrently
+    with other Tickers (the source of the historical CSV cross-ticker
+    contamination).  We cross-check the returned `symbol` field and bail
+    out if it doesn't match.
+    """
     yf_sym = _YF_FETCH_TICKER.get(ticker, ticker)
     try:
         t     = yf.Ticker(yf_sym)
         info  = t.info or {}
+        # ── Defensive: confirm the .info we got is for the symbol we asked ─
+        returned_sym = (info.get("symbol") or info.get("underlyingSymbol")
+                        or "").upper().strip()
+        want = yf_sym.upper().strip()
+        if returned_sym and returned_sym != want:
+            log.warning(
+                "Yahoo .info returned wrong symbol for %s: got %r — discarding quote",
+                yf_sym, returned_sym,
+            )
+            return pd.Series(dtype=float)
         price = info.get("regularMarketPrice") or info.get("currentPrice")
         ts    = info.get("regularMarketTime")
         if price is None:
@@ -826,7 +989,7 @@ def _fetch_yfinance_latest_quote(ticker: str) -> pd.Series:
                 ts = t.fast_info.get("lastTime")
             except Exception:
                 ts = None
-        if price is None:
+        if price is None or float(price) <= 0:
             return pd.Series(dtype=float)
         dt = _datetime.fromtimestamp(int(ts), tz=_IST).date() if ts else _datetime.now(_IST).date()
         return pd.Series({pd.Timestamp(dt): float(price)}, name=ticker)
@@ -981,13 +1144,40 @@ def _get_yfinance_primary_price(
     status       = {"ticker": ticker, "source": "yfinance", "success": True, "message": ""}
 
     def _merge_quote(s: pd.Series) -> tuple[pd.Series, bool]:
+        # Live quote may only ADD today's row (or extend the tail) — never overwrite
+        # an existing historical close, and never inject if its scale is wildly off
+        # the cached series (yfinance .info occasionally returns the wrong ticker's
+        # value during heavy concurrent fetching, which is the source of much
+        # cross-ticker contamination in the historical CSVs).
         q = _fetch_yfinance_latest_quote(ticker)
         if q.empty:
             return s, False
-        if s.empty or q.index[-1] >= s.index[-1]:
-            merged = pd.concat([s, q]).sort_index()
-            return merged[~merged.index.duplicated(keep="last")], True
-        return s, False
+        if s.empty:
+            return q, True
+        # Reject the quote if it deviates from the latest cached close by >25%.
+        # Real intraday moves never approach that without circuit breakers tripping;
+        # any such deviation is bad data, not a real move.
+        try:
+            latest_close = float(s.iloc[-1])
+            quote_val    = float(q.iloc[-1])
+            if latest_close > 0 and quote_val > 0:
+                deviation = abs(quote_val / latest_close - 1.0)
+                if deviation > 0.25:
+                    log.warning(
+                        "Rejected live quote for %s: %.2f vs cached close %.2f (%.1f%% off)",
+                        ticker, quote_val, latest_close, deviation * 100,
+                    )
+                    return s, False
+        except Exception:
+            pass
+        # Only allow the quote in if it strictly extends the series (date > tail).
+        # Never let it stomp an existing close — that path is how live-quote pollution
+        # was ending up in the historical record.
+        q = q[q.index > s.index[-1]]
+        if q.empty:
+            return s, False
+        merged = pd.concat([s, q]).sort_index()
+        return merged[~merged.index.duplicated(keep="last")], True
 
     # Full rebuild when: no cache, force-refresh, or cache looks truncated (< 100 rows
     # while years of history were requested — indicates a past partial write).
@@ -1014,12 +1204,36 @@ def _get_yfinance_primary_price(
             pass
         if fresh.empty:
             fresh = _fetch_yfinance(ticker, start_date, fetch_end)
+
+        # ── Fallback path: Yahoo dropped many ^CNX* index symbols in 2026.
+        # When yfinance returns nothing, try (1) niftyindices.com for full history,
+        # then (2) NSE daily archives for recent fill.  This makes ^CNXIT,
+        # ^CNXFMCG, ^CNXENERGY, ^CNXREALTY, etc. work again end-to-end.
+        if fresh.empty:
+            ni_name = _NSE_HIST_INDEX_TYPE.get(ticker) or _TICKER_TO_NSE_NAME.get(ticker)
+            if ni_name:
+                log.info("yfinance empty for %s — trying niftyindices.com '%s'", ticker, ni_name)
+                ni_full = _fetch_from_niftyindices(ni_name, start_date)
+                if not ni_full.empty and len(ni_full) > 30:
+                    fresh = ni_full
+                    status["source"] = "niftyindices.com"
+                else:
+                    # Last resort: NSE daily archives for the past N years
+                    arc_start = max(date.fromisoformat(start_date), date(2011, 1, 3))
+                    log.info("niftyindices empty for %s — trying NSE daily archives (%s→%s)",
+                             ticker, arc_start, today)
+                    arc = _fetch_nse_archive_days(ni_name, arc_start, today)
+                    if not arc.empty and len(arc) > 30:
+                        fresh = arc
+                        status["source"] = "NSE daily archives"
+
         if fresh.empty:
             if cached.empty:
                 return cached, {**status, "success": False,
-                                "message": f"No Yahoo Finance data for {ticker}"}
+                                "message": (f"All sources failed for {ticker} "
+                                            f"(yfinance, niftyindices, NSE archives)")}
             combined = cached
-            status["message"] = (f"Yahoo fetch failed, using cache "
+            status["message"] = (f"All sources failed, using cache "
                                  f"({combined.index[0].date()} → {combined.index[-1].date()})")
         else:
             combined = fresh.sort_index()
@@ -1067,7 +1281,8 @@ def _get_yfinance_primary_price(
             status["message"] = (f"Cached {len(combined)} rows "
                                  f"({combined.index[0].date()} → {combined.index[-1].date()})")
         else:
-            fetch_start = max(cached.index[0].date(), last_cached - timedelta(days=10))
+            # Pull a wider tail (60 days) so we have enough overlap for rebase detection.
+            fetch_start = max(cached.index[0].date(), last_cached - timedelta(days=60))
             fresh = _fetch_yfinance(ticker, str(fetch_start), fetch_end)
             if fresh.empty:
                 _arc_type = _NSE_HIST_INDEX_TYPE.get(ticker)
@@ -1081,7 +1296,35 @@ def _get_yfinance_primary_price(
                 status["message"] = (f"Yahoo fetch failed, using cache "
                                      f"({combined.index[0].date()} → {combined.index[-1].date()})")
             else:
-                combined = pd.concat([cached, fresh]).sort_index()
+                # Re-adjustment / corruption check: if the overlap between cache and
+                # fresh disagrees substantially, the cache is stale (post-split rebase
+                # or accumulated cross-ticker contamination). Trust the fresh fetch.
+                if _detect_rebase_event(cached, fresh):
+                    log.info("Discarding cached %s; will rebuild from fresh fetch", ticker)
+                    # Pull full history so we don't end up with a tiny series.
+                    full_fresh = pd.Series(dtype=float)
+                    try:
+                        yf_sym = _YF_FETCH_TICKER.get(ticker, ticker)
+                        h = yf.Ticker(yf_sym).history(period="max", auto_adjust=True)
+                        if not h.empty and "Close" in h.columns:
+                            ss = h["Close"].dropna()
+                            ss.index = pd.to_datetime(ss.index).tz_localize(None).normalize()
+                            ss = ss[~ss.index.duplicated(keep="last")].sort_index()
+                            if len(ss) > 30:
+                                full_fresh = ss
+                    except Exception:
+                        pass
+                    if full_fresh.empty:
+                        full_fresh = _fetch_yfinance(ticker, "2000-01-01", fetch_end)
+                    if not full_fresh.empty:
+                        combined = full_fresh.sort_index()
+                    else:
+                        combined = fresh.sort_index()
+                else:
+                    # Drop overlapping cached rows so fresh values win on conflicts
+                    # (fresh data reflects current split/dividend adjustments).
+                    cached_kept = cached[cached.index < fresh.index[0]]
+                    combined = pd.concat([cached_kept, fresh]).sort_index()
                 combined = combined[~combined.index.duplicated(keep="last")]
                 combined = _fix_consolidation_spikes(combined)
 
