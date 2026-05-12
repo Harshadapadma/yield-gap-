@@ -254,6 +254,7 @@ def fetch_prices_batch(
     start: str = DATA_START,
     batch_size: int = 50,
     progress_cb: Callable[[int, int, str], None] | None = None,
+    cache_only: bool = False,
 ) -> pd.DataFrame:
     """
     Fetch Adj Close prices for many tickers in parallel batches.
@@ -263,9 +264,26 @@ def fetch_prices_batch(
     - Brand-new tickers (no cache at all) are downloaded from `start`.
     All network batches run in parallel via ThreadPoolExecutor.
 
+    cache_only=True: skip all yfinance calls; read committed CSVs only.
     progress_cb(done, total, ticker_name) – called after each batch completes.
     """
     import concurrent.futures
+
+    # Cache-only mode: read every ticker from disk, no network calls at all.
+    if cache_only:
+        all_series: dict[str, pd.Series] = {}
+        for i, t in enumerate(tickers):
+            s = _load_cached_price(t)
+            if s is not None and not s.empty:
+                all_series[t] = s[s.index >= pd.Timestamp(start)]
+            if progress_cb and (i % 50 == 0 or i == len(tickers) - 1):
+                progress_cb(i + 1, len(tickers), t)
+        if not all_series:
+            return pd.DataFrame()
+        df = pd.DataFrame(all_series)
+        df.index = pd.to_datetime(df.index)
+        df.sort_index(inplace=True)
+        return df[df.index >= pd.Timestamp(start)]
 
     all_series: dict[str, pd.Series] = {}
     persist_today = not _is_market_hours()
