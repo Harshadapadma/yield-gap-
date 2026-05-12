@@ -16,7 +16,10 @@ from datetime import date, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
-import streamlit as st
+try:
+    import streamlit as st
+except (ImportError, ModuleNotFoundError):
+    st = None  # type: ignore[assignment]
 
 from data.index_store import get_price, get_stock_price, get_min_start, INSTRUMENTS, load_cached_price
 from data.nse_stock_list import NSE_STOCKS
@@ -511,10 +514,11 @@ def render() -> None:
     date_from, date_to = _date_filter()
 
     with st.spinner(f"Loading {name_a} and {name_b}..."):
-        _fetch_a = get_stock_price if is_stock_a else get_price
-        _fetch_b = get_stock_price if is_stock_b else get_price
-        s_a_raw, status_a = _fetch_a(ticker_a, start_date=DATA_START)
-        s_b_raw, status_b = _fetch_b(ticker_b, start_date=DATA_START)
+        # Use cache-only loader — data pre-fetched by GitHub Actions
+        s_a_raw = load_cached_price(ticker_a, start_date=DATA_START)
+        s_b_raw = load_cached_price(ticker_b, start_date=DATA_START)
+        status_a = {"source": "local CSV", "message": "Cached"}
+        status_b = {"source": "local CSV", "message": "Cached"}
 
     if s_a_raw.empty:
         st.error(f"Could not fetch data for {name_a}.\n\n`{status_a['message']}`")

@@ -161,12 +161,8 @@ st.markdown(
 
 setup_logging()
 
-# ── Background data prefetch (once per Streamlit session) ─────────────────────
-if "prefetch_started" not in st.session_state:
-    st.session_state.prefetch_started = True
-    import threading
-    from data.index_store import prefetch_all_instruments
-    threading.Thread(target=prefetch_all_instruments, daemon=True).start()
+# Data is pre-fetched by GitHub Actions (Mon-Fri 16:30 IST) and committed as CSVs.
+# No live network calls on startup — all reads come from those committed files.
 
 
 # ── IST helpers ────────────────────────────────────────────────────────────────
@@ -254,11 +250,7 @@ with st.sidebar:
 
     # ── Page-specific sidebar controls ────────────────────────────────────────
     if active_page == "yield_gap":
-        try:
-            from data.fetcher import fetch_pe_ratio
-            pe_ratio, _ = fetch_pe_ratio()
-        except Exception:
-            pe_ratio = 21.27
+        pe_ratio = 21.27   # fallback; actual PE comes from cached CSV in load_all()
 
     elif active_page == "spread":
         st.caption("Rolling return diff between any two instruments.")

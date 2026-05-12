@@ -9,7 +9,10 @@ from datetime import date, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
-import streamlit as st
+try:
+    import streamlit as st
+except (ImportError, ModuleNotFoundError):
+    st = None  # type: ignore[assignment]
 
 from data.breadth_fetcher import (
     BENCHMARK_CATALOG,
