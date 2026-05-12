@@ -308,7 +308,7 @@ def render_breadth_analysis() -> None:
     window_label   = "1 Year  (252 days)"
     window_days    = WINDOW_OPTIONS.get(window_label, 252)
     agg_freq       = "Monthly"     # monthly keeps clean SD bands; today's live point always appended
-    min_coverage   = 80
+    min_coverage   = 20
     show_dist      = True
     show_snapshot  = True
     show_bench_px  = False
