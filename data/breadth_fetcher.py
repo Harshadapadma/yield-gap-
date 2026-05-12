@@ -372,10 +372,9 @@ def fetch_prices_batch(
                     _save_cached_price(t, s, persist_today=persist_today)
                 _report(len(b), b[-1] if b else "")
 
-    # ── New tickers: parallel batch download, capped to 4 years ─────────────
+    # ── New tickers: download full history from DATA_START ───────────────────
     if new_tickers:
-        _four_yr = (datetime.now(_IST) - timedelta(days=4 * 365)).strftime("%Y-%m-%d")
-        effective_start = _four_yr if start < _four_yr else start
+        effective_start = start  # full history, no 4-year cap
 
         def _new_batch(batch: list[str]) -> dict[str, pd.Series]:
             try:

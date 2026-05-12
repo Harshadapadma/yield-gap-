@@ -373,6 +373,7 @@ def render_breadth_analysis() -> None:
     # ── Cache clear ───────────────────────────────────────────────────────────
     if clear_btn:
         n = clear_price_cache()
+        st.session_state.pop("breadth_result", None)
         st.sidebar.success(f"Cleared {n} cached files.")
 
     # ── Info panel ────────────────────────────────────────────────────────────
@@ -468,8 +469,8 @@ def render_breadth_analysis() -> None:
                 f"⬇️ Downloading prices: {done}/{total} tickers… ({ticker})"
             )
 
-        st.write(f"⬇️ Loading price data from cache…")
-        prices_df = fetch_prices_batch(tickers, progress_cb=_progress, cache_only=True)
+        st.write(f"⬇️ Downloading price data (cached tickers load instantly)…")
+        prices_df = fetch_prices_batch(tickers, progress_cb=_progress)
         prog_bar.empty()
         prog_text.empty()
 
