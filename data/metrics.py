@@ -52,8 +52,11 @@ def align_and_compute(
         logger.info("PE series: %d rows | %.2f – %.2f",
                     df["nifty_pe"].notna().sum(), df["nifty_pe"].min(), df["nifty_pe"].max())
     else:
-        df["nifty_pe"] = float(pe) if pe else 22.0
-        logger.info("PE scalar: %.2f", df["nifty_pe"].iloc[0])
+        if isinstance(pe, pd.Series):
+            df["nifty_pe"] = 22.0  # empty series — use fallback
+        else:
+            df["nifty_pe"] = float(pe) if pe else 22.0
+        logger.info("PE scalar/fallback: %.2f", df["nifty_pe"].iloc[0])
 
     # ── 3. Derived metrics ────────────────────────────────────────────────────
     df["earnings_yield"]  = (1.0 / df["nifty_pe"]) * 100.0
