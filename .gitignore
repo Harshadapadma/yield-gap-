@@ -3,6 +3,5 @@ __pycache__/
 *.pyc
 
 *.pdf
-*.csv
 *.xlsx
 .claude/
