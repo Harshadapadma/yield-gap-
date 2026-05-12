@@ -494,6 +494,8 @@ def get_latest_snapshot(
     rows = []
     for col in prices.columns:
         s  = prices[col].dropna()
+        if s.empty:
+            continue
         va = s.asof(dt)
         vb = s.asof(dt_back)
         if pd.isna(va) or pd.isna(vb) or vb <= 0:
