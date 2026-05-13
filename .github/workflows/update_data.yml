@@ -32,6 +32,9 @@ jobs:
       - name: Update breadth stock prices (Nifty 500)
         run: python scripts/cache_breadth_prices.py
 
+      - name: Compute breadth series and save result CSV
+        run: python scripts/compute_breadth.py
+
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"

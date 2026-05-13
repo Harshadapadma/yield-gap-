@@ -6,6 +6,7 @@ Index Breadth Analyser — renders the full UI for the breadth module.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -27,6 +28,21 @@ from data.breadth_fetcher import (
     get_latest_snapshot,
     tickers_for_universe,
 )
+
+_PRECOMPUTED_CSV = Path(__file__).resolve().parent.parent / "cache" / "breadth" / "breadth_result.csv"
+
+
+def _load_precomputed() -> pd.DataFrame | None:
+    """Load the pre-computed breadth CSV committed by GitHub Actions. Returns None if missing."""
+    if not _PRECOMPUTED_CSV.exists():
+        return None
+    try:
+        df = pd.read_csv(_PRECOMPUTED_CSV, index_col=0, parse_dates=True)
+        if df.empty:
+            return None
+        return df
+    except Exception:
+        return None
 
 # Dark theme palette (matches existing app)
 _BG       = "#0D1117"
@@ -406,37 +422,57 @@ def render_breadth_analysis() -> None:
 
     # ── Main fetch-and-compute flow ───────────────────────────────────────────
     cached_result = st.session_state.get("breadth_result")
-    snap = cached_result.get("snapshot_df") if cached_result else None
-    snap_has_price = snap is not None and "Price (₹)" in snap.columns
-    cached_as_of             = cached_result.get("computed_date")           if cached_result else None
-    cached_during_market     = cached_result.get("computed_during_market")  if cached_result else False
-    # Stale if: different day, OR was computed mid-market and market has since closed
+    cached_as_of          = cached_result.get("computed_date")          if cached_result else None
+    cached_during_market  = cached_result.get("computed_during_market") if cached_result else False
     cache_is_stale = (
         cached_as_of is None
         or cached_as_of < today
         or (cached_during_market and _after_close())
     )
     has_matching_cache = (
-        cached_result and snap_has_price
+        cached_result
         and not cache_is_stale
-        and cached_result.get("universe")   == universe_name
-        and cached_result.get("benchmark")  == benchmark_name
-        and cached_result.get("window")     == window_days
+        and cached_result.get("universe")  == universe_name
+        and cached_result.get("benchmark") == benchmark_name
+        and cached_result.get("window")    == window_days
     )
 
     if not fetch_btn and has_matching_cache:
-        # Fast path: render from session cache
         _render_results(
             cached_result["breadth_df"],
             cached_result["bench_series"],
-            cached_result["snapshot_df"],
-            cached_result["bench_ret"],
+            cached_result.get("snapshot_df"),
+            cached_result.get("bench_ret"),
             universe_name, benchmark_name, window_label,
             date_from, date_to, show_dist, show_snapshot, show_bench_px,
         )
         return
 
-    # ── Fetch + Compute ───────────────────────────────────────────────────────
+    # ── Try pre-computed CSV first (written daily by GitHub Actions) ──────────
+    if not fetch_btn:
+        precomputed = _load_precomputed()
+        if precomputed is not None:
+            bench_ticker = bench_info["ticker"]
+            bench_series = fetch_single_price(bench_ticker)
+            st.session_state["breadth_result"] = {
+                "universe":               universe_name,
+                "benchmark":              benchmark_name,
+                "window":                 window_days,
+                "breadth_df":             precomputed,
+                "bench_series":           bench_series,
+                "snapshot_df":            None,
+                "bench_ret":              None,
+                "computed_date":          today,
+                "computed_during_market": _is_market_hours(),
+            }
+            _render_results(
+                precomputed, bench_series, None, None,
+                universe_name, benchmark_name, window_label,
+                date_from, date_to, show_dist, show_snapshot, show_bench_px,
+            )
+            return
+
+    # ── Full compute path (Fetch & Analyse button or no pre-computed CSV) ─────
     freq_map = {"Monthly": "BME", "Weekly": "W-FRI", "Daily": "B"}
     freq = freq_map.get(agg_freq, "BME")
 
@@ -458,18 +494,15 @@ def render_breadth_analysis() -> None:
             return
         st.write(f"✅ {len(tickers)} stocks in {universe_name}")
 
-        # Progress state
-        prog_text  = st.empty()
-        prog_bar   = st.progress(0.0)
+        prog_text = st.empty()
+        prog_bar  = st.progress(0.0)
 
         def _progress(done: int, total: int, ticker: str) -> None:
             frac = done / total if total else 0
             prog_bar.progress(frac)
-            prog_text.write(
-                f"⬇️ Downloading prices: {done}/{total} tickers… ({ticker})"
-            )
+            prog_text.write(f"⬇️ Downloading prices: {done}/{total} tickers… ({ticker})")
 
-        st.write(f"⬇️ Downloading price data (cached tickers load instantly)…")
+        st.write("⬇️ Downloading price data (cached tickers load instantly)…")
         prices_df = fetch_prices_batch(tickers, progress_cb=_progress)
         prog_bar.empty()
         prog_text.empty()
@@ -489,10 +522,7 @@ def render_breadth_analysis() -> None:
         )
 
         if breadth_df.empty:
-            st.error(
-                "Breadth computation returned no data. "
-                "Try a shorter window or wider date range."
-            )
+            st.error("Breadth computation returned no data.")
             return
         st.write(f"✅ Breadth computed: {len(breadth_df)} data points")
 
@@ -502,7 +532,6 @@ def render_breadth_analysis() -> None:
         )
         status.update(label="✅ Done!", state="complete", expanded=False)
 
-    # Cache in session state
     st.session_state["breadth_result"] = {
         "universe":               universe_name,
         "benchmark":              benchmark_name,
@@ -615,7 +644,7 @@ def _render_results(
     )
 
     # ── Secondary charts ──────────────────────────────────────────────────────
-    if show_dist and show_bench_px:
+    if show_dist and show_bench_px and snapshot_df is not None:
         ca, cb = st.columns([3, 2])
         with ca:
             st.plotly_chart(
@@ -632,14 +661,14 @@ def _render_results(
             plot_benchmark_price(bench_series, benchmark_name),
             use_container_width=True,
         )
-    elif show_dist:
+    elif show_dist and snapshot_df is not None:
         st.plotly_chart(
             plot_return_distribution(snapshot_df, bench_ret, benchmark_name),
             use_container_width=True,
         )
 
     # ── Stock snapshot table ──────────────────────────────────────────────────
-    if show_snapshot and not snapshot_df.empty:
+    if show_snapshot and snapshot_df is not None and not snapshot_df.empty:
         with st.expander(
             f"📋 Stock-Level Snapshot ({latest_elig} stocks · as of {latest_date})",
             expanded=False,
