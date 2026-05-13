@@ -594,45 +594,8 @@ def _render_results(
         st.warning("No breadth data for selected date range. Try widening it.")
         return
 
-    latest       = df["pct_beating"].iloc[-1]
     latest_date  = df.index[-1].strftime("%Y-%m-%d")
-    avg_breadth  = full_pct.mean()          # full-history average
-    max_breadth  = df["pct_beating"].max()
-    min_breadth  = df["pct_beating"].min()
     latest_elig  = df["count_eligible"].iloc[-1]
-
-    # ── Key metrics ───────────────────────────────────────────────────────────
-    col_color = _GREEN if latest >= 50 else _RED
-    m1, m2, m3, m4, m5 = st.columns(5)
-    with m1:
-        st.markdown(
-            _metric("Latest Breadth", f"{latest:.1f}%", col_color),
-            unsafe_allow_html=True,
-        )
-    with m2:
-        st.markdown(
-            _metric("Full-History Avg", f"{avg_breadth:.1f}%", _GREY),
-            unsafe_allow_html=True,
-        )
-    with m3:
-        pct_color = _GREEN if bench_ret and bench_ret > 0 else _RED
-        bench_str = f"{bench_ret:.1f}%" if bench_ret is not None else "N/A"
-        st.markdown(
-            _metric(f"Benchmark {window_label.split('(')[0].strip()} Ret", bench_str, pct_color),
-            unsafe_allow_html=True,
-        )
-    with m4:
-        st.markdown(
-            _metric("Period High", f"{max_breadth:.1f}%", _GREEN),
-            unsafe_allow_html=True,
-        )
-    with m5:
-        st.markdown(
-            _metric("Period Low", f"{min_breadth:.1f}%", _RED),
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
     # ── Main breadth chart ────────────────────────────────────────────────────
     st.plotly_chart(
