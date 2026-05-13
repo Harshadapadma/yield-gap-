@@ -99,12 +99,17 @@ for name, ticker in INDIAN_INDICES.items():
         has_gap    = bool((diffs > 20).any())
         is_current = last_d >= today
 
-        if is_current and n_rows >= MIN_ROWS and not has_gap:
+        # Ignore gaps that are entirely older than 3 years — can't be patched.
+        gap_cutoff_early = date.today() - timedelta(days=365 * 3)
+        only_old_gaps = has_gap and not bool(
+            (diffs > 20)[diffs.index >= pd.Timestamp(gap_cutoff_early)].any()
+        )
+        if is_current and n_rows >= MIN_ROWS and (not has_gap or only_old_gaps):
             print(f"  ✅ {name:30s}  already good ({existing.index[0].date()} → {last_d}, {n_rows} rows)")
             saved.append(name)
             continue
 
-        if has_gap:
+        if has_gap and not only_old_gaps:
             print(f"  🔧 {name:30s}  has gap — forcing fresh download…")
         elif not is_current:
             print(f"  🔧 {name:30s}  stale (last: {last_d}) — fetching incremental…")
@@ -113,6 +118,16 @@ for name, ticker in INDIAN_INDICES.items():
     last_cached = existing.index[-1].date() if not existing.empty else None
     diffs       = existing.index.to_series().diff().dt.days if not existing.empty else pd.Series()
     has_gap     = bool((diffs > 20).any()) if not diffs.empty else False
+
+    # Ignore gaps that are entirely in the distant past (>3 years ago).
+    # Old historical gaps (e.g. 2008-2009 GFC missing data) can't be patched
+    # by yfinance anyway; forcing a full re-download just wastes time and breaks
+    # the incremental path that correctly appends today's close.
+    if has_gap and not diffs.empty:
+        gap_cutoff = pd.Timestamp(today - timedelta(days=365 * 3))
+        recent_gap = (diffs > 20) & (diffs.index >= gap_cutoff)
+        if not recent_gap.any():
+            has_gap = False  # only old gaps — treat as fresh-enough for incremental
 
     nse_name = _TICKER_TO_NSE_NAME.get(ticker)
 
