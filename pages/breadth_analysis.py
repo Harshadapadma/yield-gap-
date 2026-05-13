@@ -568,10 +568,12 @@ def _render_results(
     # Full-history pct series (for SD bands) — before date filter
     full_pct = breadth_df["pct_beating"].dropna()
 
-    # Apply date filter
+    # Apply date filter — always include the last row even if its BME label is a future month-end
+    last_data_date = breadth_df.index.max().date()
+    effective_date_to = max(date_to, last_data_date)
     mask = (
         (breadth_df.index.date >= date_from) &
-        (breadth_df.index.date <= date_to)
+        (breadth_df.index.date <= effective_date_to)
     )
     df = breadth_df.loc[mask]
 
@@ -582,12 +584,12 @@ def _render_results(
         lookback = breadth_df.index.date < date_from
         anchor = breadth_df.loc[lookback].iloc[[-1]] if lookback.any() else pd.DataFrame()
         combined = pd.concat([anchor, df]) if not anchor.empty else df
-        bdays = pd.bdate_range(date_from, date_to)
+        bdays = pd.bdate_range(date_from, effective_date_to)
         df = (
             combined
             .reindex(combined.index.union(pd.DatetimeIndex(bdays)))
             .ffill()
-            .loc[lambda x: (x.index.date >= date_from) & (x.index.date <= date_to)]
+            .loc[lambda x: (x.index.date >= date_from) & (x.index.date <= effective_date_to)]
         )
 
     if df.empty:
@@ -725,20 +727,6 @@ def _render_results(
             mime="text/csv",
         )
 
-    # ── Disclaimer ────────────────────────────────────────────────────────────
-    st.markdown(
-        f"""
-        <div style='margin-top:16px;padding:10px 16px;border:1px solid {_BORDER};
-                    border-left:3px solid {_YELLOW};border-radius:6px;
-                    font-family:{_FONT};font-size:10px;color:{_GREY}'>
-            ⚠️ <b style='color:{_YELLOW}'>Survivorship bias note:</b> This analysis uses 
-            the <i>current</i> {universe_name} constituent list applied to all historical dates.
-            Stocks that existed in 2008 but were removed later are not counted.
-            Results are indicative, not investment advice.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 
