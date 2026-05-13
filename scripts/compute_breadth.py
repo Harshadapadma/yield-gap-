@@ -1,9 +1,7 @@
 """
 scripts/compute_breadth.py
 Run by GitHub Actions after cache_breadth_prices.py.
-Computes the breadth series (Nifty 500 vs Nifty 50, 1Y window)
-and saves the result to cache/breadth/breadth_result.csv so the
-app can load it instantly without reprocessing 459 CSVs.
+Computes the breadth series + stock snapshot and saves both to cache/breadth/.
 """
 import sys
 from pathlib import Path
@@ -17,12 +15,14 @@ from data.breadth_fetcher import (
     fetch_prices_batch,
     fetch_single_price,
     compute_breadth_series,
+    get_latest_snapshot,
     BENCHMARK_CATALOG,
 )
 
-OUT = ROOT / "cache" / "breadth" / "breadth_result.csv"
+BREADTH_OUT  = ROOT / "cache" / "breadth" / "breadth_result.csv"
+SNAPSHOT_OUT = ROOT / "cache" / "breadth" / "snapshot_result.csv"
 
-print("\n=== Computing Breadth Series ===\n")
+print("\n=== Computing Breadth Series + Snapshot ===\n")
 
 bench_ticker = BENCHMARK_CATALOG["Nifty 50"]["ticker"]
 print(f"Loading benchmark ({bench_ticker})…")
@@ -58,8 +58,23 @@ if breadth_df.empty:
     print("ERROR: Breadth computation returned empty result.")
     sys.exit(1)
 
-OUT.parent.mkdir(parents=True, exist_ok=True)
-breadth_df.to_csv(OUT)
-print(f"\nSaved {len(breadth_df)} rows → {OUT.relative_to(ROOT)}")
-print(f"Date range: {breadth_df.index[0].date()} → {breadth_df.index[-1].date()}")
+BREADTH_OUT.parent.mkdir(parents=True, exist_ok=True)
+breadth_df.to_csv(BREADTH_OUT)
+print(f"Saved {len(breadth_df)} breadth rows → {BREADTH_OUT.relative_to(ROOT)}")
+print(f"  Date range: {breadth_df.index[0].date()} → {breadth_df.index[-1].date()}")
+
+print("Computing stock snapshot…")
+snapshot_df, bench_ret = get_latest_snapshot(prices_df, bench, 252, "Nifty 500")
+if snapshot_df is not None and not snapshot_df.empty:
+    snapshot_df.to_csv(SNAPSHOT_OUT, index=False)
+    print(f"Saved {len(snapshot_df)} stocks → {SNAPSHOT_OUT.relative_to(ROOT)}")
+    if bench_ret is not None:
+        # Save bench_ret as first line comment so app can read it
+        with open(SNAPSHOT_OUT, "r") as f:
+            content = f.read()
+        with open(SNAPSHOT_OUT, "w") as f:
+            f.write(f"# bench_ret={bench_ret:.6f}\n" + content)
+else:
+    print("WARNING: Snapshot empty, skipping.")
+
 print("\nDone.")

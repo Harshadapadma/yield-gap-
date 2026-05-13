@@ -17,7 +17,6 @@ except (ImportError, ModuleNotFoundError):
 
 from data.breadth_fetcher import (
     BENCHMARK_CATALOG,
-    UNIVERSE_CATALOG,
     WINDOW_OPTIONS,
     _after_close,
     _is_market_hours,
@@ -30,19 +29,32 @@ from data.breadth_fetcher import (
 )
 
 _PRECOMPUTED_CSV = Path(__file__).resolve().parent.parent / "cache" / "breadth" / "breadth_result.csv"
+_SNAPSHOT_CSV    = Path(__file__).resolve().parent.parent / "cache" / "breadth" / "snapshot_result.csv"
 
 
 def _load_precomputed() -> pd.DataFrame | None:
-    """Load the pre-computed breadth CSV committed by GitHub Actions. Returns None if missing."""
     if not _PRECOMPUTED_CSV.exists():
         return None
     try:
         df = pd.read_csv(_PRECOMPUTED_CSV, index_col=0, parse_dates=True)
-        if df.empty:
-            return None
-        return df
+        return df if not df.empty else None
     except Exception:
         return None
+
+
+def _load_snapshot() -> tuple[pd.DataFrame | None, float | None]:
+    if not _SNAPSHOT_CSV.exists():
+        return None, None
+    try:
+        bench_ret = None
+        with open(_SNAPSHOT_CSV) as f:
+            first = f.readline()
+            if first.startswith("# bench_ret="):
+                bench_ret = float(first.strip().split("=")[1])
+        df = pd.read_csv(_SNAPSHOT_CSV, comment="#")
+        return (df if not df.empty else None), bench_ret
+    except Exception:
+        return None, None
 
 # Dark theme palette (matches existing app)
 _BG       = "#0D1117"
@@ -283,17 +295,6 @@ def plot_benchmark_price(benchmark_series: pd.Series, benchmark_name: str) -> go
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
 
-def _metric(label: str, value: str, color: str = _BLUE) -> str:
-    return (
-        f"<div style='background:{_BG2};border:1px solid {_BORDER};"
-        f"border-left:3px solid {color};border-radius:6px;"
-        f"padding:10px 16px;font-family:{_FONT}'>"
-        f"<div style='font-size:10px;color:{_GREY};text-transform:uppercase;"
-        f"letter-spacing:1px'>{label}</div>"
-        f"<div style='font-size:22px;font-weight:700;color:{color}'>{value}</div>"
-        f"</div>"
-    )
-
 
 def _header() -> None:
     st.markdown(
@@ -392,33 +393,7 @@ def render_breadth_analysis() -> None:
         st.session_state.pop("breadth_result", None)
         st.sidebar.success(f"Cleared {n} cached files.")
 
-    # ── Info panel ────────────────────────────────────────────────────────────
-    info_cols = st.columns([2, 2, 2, 2])
-    univ_info = UNIVERSE_CATALOG[universe_name]
     bench_info = BENCHMARK_CATALOG[benchmark_name]
-
-    with info_cols[0]:
-        st.markdown(
-            _metric("Universe", f"{universe_name}", _BLUE),
-            unsafe_allow_html=True,
-        )
-    with info_cols[1]:
-        st.markdown(
-            _metric("Approx. size", f"~{univ_info['approx_size']} stocks", _GREY),
-            unsafe_allow_html=True,
-        )
-    with info_cols[2]:
-        st.markdown(
-            _metric("Benchmark", benchmark_name, _YELLOW),
-            unsafe_allow_html=True,
-        )
-    with info_cols[3]:
-        st.markdown(
-            _metric("Window", window_label.split("(")[0].strip(), _GREEN),
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
     # ── Main fetch-and-compute flow ───────────────────────────────────────────
     cached_result = st.session_state.get("breadth_result")
@@ -454,19 +429,20 @@ def render_breadth_analysis() -> None:
         if precomputed is not None:
             bench_ticker = bench_info["ticker"]
             bench_series = fetch_single_price(bench_ticker)
+            snapshot_df, bench_ret = _load_snapshot()
             st.session_state["breadth_result"] = {
                 "universe":               universe_name,
                 "benchmark":              benchmark_name,
                 "window":                 window_days,
                 "breadth_df":             precomputed,
                 "bench_series":           bench_series,
-                "snapshot_df":            None,
-                "bench_ret":              None,
+                "snapshot_df":            snapshot_df,
+                "bench_ret":              bench_ret,
                 "computed_date":          today,
                 "computed_during_market": _is_market_hours(),
             }
             _render_results(
-                precomputed, bench_series, None, None,
+                precomputed, bench_series, snapshot_df, bench_ret,
                 universe_name, benchmark_name, window_label,
                 date_from, date_to, show_dist, show_snapshot, show_bench_px,
             )
@@ -668,25 +644,6 @@ def _render_results(
                 mime="text/csv",
             )
 
-    # ── Raw breadth data ──────────────────────────────────────────────────────
-    with st.expander("📋 Raw Breadth Data", expanded=False):
-        st.dataframe(
-            df.sort_index(ascending=False)
-              .style.format({
-                  "pct_beating": "{:.1f}",
-                  "benchmark_return": "{:+.2f}",
-                  "median_stock_return": "{:+.2f}",
-                  "mean_stock_return": "{:+.2f}",
-              }),
-            use_container_width=True,
-            height=300,
-        )
-        st.download_button(
-            "⬇️ Download Breadth CSV",
-            data=df.reset_index().to_csv(index=False),
-            file_name=f"breadth_{universe_name.replace(' ','_')}_vs_{benchmark_name.replace(' ','_')}.csv",
-            mime="text/csv",
-        )
 
 
 
