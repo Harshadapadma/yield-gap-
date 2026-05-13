@@ -65,11 +65,10 @@ _NIFTYINDICES_NAME: dict[str, str] = {
 # Yahoo Finance ticker overrides for internal ticker IDs that differ from Yahoo symbols
 # Used as primary source now that yfinance is the default for all instruments
 _YF_FETCH_TICKER: dict[str, str] = {
-    "NIFTY500":   "^CRSLDX",    # Nifty 500 on Yahoo Finance
+    "NIFTY500":    "^CRSLDX",   # Nifty 500 on Yahoo Finance
     "NIFTYNEXT50": "^NSMIDCP",  # Nifty Next 50 (Junior Nifty) on Yahoo Finance
-    # Smallcap 100: Yahoo retired ^CNXSC; ^CNXSMALL is the live alias.
-    # NSE archive fallback ("NIFTY SMALLCAP 100") still works regardless.
-    "^CNXSC":     "^CNXSMALL",
+    # ^CNXSC is the live Yahoo Finance ticker for Nifty Smallcap 100 — use directly.
+    # (^CNXSMALL was the old alias; it now returns 404.)
 }
 
 # NSE archive index name for each ticker (used for archive fallback when yfinance fails/bad)
