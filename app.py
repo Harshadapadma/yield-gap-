@@ -251,11 +251,19 @@ with st.sidebar:
     # ── Trigger GitHub Actions data update ───────────────────────────────────
     if st.button("⬆️ Update Data Now", use_container_width=True, key="trigger_gh_action"):
         try:
+            import os as _os
             import requests as _req
-            _token = st.secrets.get("GITHUB_TOKEN", "")
-            _repo  = st.secrets.get("GITHUB_REPO", "Harshadapadma/yield-gap-")
+            # Try Streamlit secrets first, fall back to environment variable (Render)
+            try:
+                _token = st.secrets.get("GITHUB_TOKEN", "")
+                _repo  = st.secrets.get("GITHUB_REPO", "Harshadapadma/yield-gap-")
+            except Exception:
+                _token = ""
+                _repo  = "Harshadapadma/yield-gap-"
+            _token = _token or _os.environ.get("GITHUB_TOKEN", "")
+            _repo  = _repo  or _os.environ.get("GITHUB_REPO", "Harshadapadma/yield-gap-")
             if not _token:
-                st.sidebar.error("GITHUB_TOKEN not set in secrets.")
+                st.sidebar.error("Set GITHUB_TOKEN in Render Environment Variables.")
             else:
                 _r = _req.post(
                     f"https://api.github.com/repos/{_repo}/actions/workflows/update_data.yml/dispatches",
