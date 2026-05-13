@@ -95,7 +95,7 @@ for name, ticker in INDIAN_INDICES.items():
         # Check for internal gaps > 20 days
         diffs      = existing.index.to_series().diff().dt.days
         has_gap    = bool((diffs > 20).any())
-        is_current = last_d >= today - timedelta(days=5)
+        is_current = last_d >= today - timedelta(days=1)
 
         if is_current and n_rows >= MIN_ROWS and not has_gap:
             print(f"  ✅ {name:30s}  already good ({existing.index[0].date()} → {last_d}, {n_rows} rows)")
@@ -200,7 +200,7 @@ for name, ticker in yf_only.items():
     today    = date.today()
     last_d   = existing.index[-1].date() if not existing.empty else None
 
-    if last_d and last_d >= today - timedelta(days=2):
+    if last_d and last_d >= today - timedelta(days=1):
         print(f"  ✅ {name:35s}  already up to date ({last_d})")
         continue
 
