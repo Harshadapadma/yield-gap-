@@ -17,6 +17,7 @@ except (ImportError, ModuleNotFoundError):
 
 from data.breadth_fetcher import (
     BENCHMARK_CATALOG,
+    UNIVERSE_CATALOG,
     WINDOW_OPTIONS,
     _after_close,
     _is_market_hours,
@@ -295,6 +296,16 @@ def plot_benchmark_price(benchmark_series: pd.Series, benchmark_name: str) -> go
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
 
+def _metric(label: str, value: str, color: str = "#58A6FF") -> str:
+    return (
+        f"<div style='background:#161B22;border:1px solid #21262D;"
+        f"border-left:3px solid {color};border-radius:6px;"
+        f"padding:10px 16px;font-family:IBM Plex Mono,monospace'>"
+        f"<div style='font-size:10px;color:#8B949E;text-transform:uppercase;letter-spacing:1px'>{label}</div>"
+        f"<div style='font-size:22px;font-weight:700;color:{color}'>{value}</div>"
+        f"</div>"
+    )
+
 
 def _header() -> None:
     st.markdown(
@@ -394,6 +405,26 @@ def render_breadth_analysis() -> None:
         st.sidebar.success(f"Cleared {n} cached files.")
 
     bench_info = BENCHMARK_CATALOG[benchmark_name]
+    univ_info  = UNIVERSE_CATALOG[universe_name]
+
+    # ── Info panel (Universe, size, Benchmark) ───────────────────────────────
+    info_cols = st.columns([2, 2, 2])
+    with info_cols[0]:
+        st.markdown(
+            _metric("Universe", universe_name, _BLUE),
+            unsafe_allow_html=True,
+        )
+    with info_cols[1]:
+        st.markdown(
+            _metric("Approx. size", f"~{univ_info['approx_size']} stocks", _GREY),
+            unsafe_allow_html=True,
+        )
+    with info_cols[2]:
+        st.markdown(
+            _metric("Benchmark", benchmark_name, _YELLOW),
+            unsafe_allow_html=True,
+        )
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
     # ── Main fetch-and-compute flow ───────────────────────────────────────────
     cached_result = st.session_state.get("breadth_result")
@@ -610,7 +641,7 @@ def _render_results(
     if show_snapshot and snapshot_df is not None and not snapshot_df.empty:
         with st.expander(
             f"📋 Stock-Level Snapshot ({latest_elig} stocks · as of {latest_date})",
-            expanded=False,
+            expanded=True,
         ):
             col_a, col_b = st.columns([3, 1])
             with col_a:
