@@ -26,10 +26,10 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd
 
 from data.index_store import (
-    INSTRUMENTS, _TICKER_TO_NSE_NAME,
+    INSTRUMENTS, _TICKER_TO_NSE_NAME, _NSE_HIST_INDEX_TYPE,
     _csv_path, _load_csv, _save_csv,
     _fetch_yfinance, _fix_consolidation_spikes,
-    _fetch_from_niftyindices,
+    _fetch_from_niftyindices, _fetch_nse_archive_days,
 )
 
 print("\n" + "=" * 60)
@@ -129,27 +129,37 @@ for name, ticker in INDIAN_INDICES.items():
         if not recent_gap.any():
             has_gap = False  # only old gaps — treat as fresh-enough for incremental
 
-    nse_name = _TICKER_TO_NSE_NAME.get(ticker)
+    nse_name     = _TICKER_TO_NSE_NAME.get(ticker)
+    archive_name = _NSE_HIST_INDEX_TYPE.get(ticker)
 
     if has_gap or existing.empty:
-        # Try 1: yfinance full re-download
-        new = _yf_full(ticker, start="2006-01-01")
+        # Has a recent gap or no data at all — need a full re-fetch to fill the gap.
+        # But if existing data is present, only fetch from last_cached onward; the
+        # data before that is already in the CSV and doesn't need re-downloading.
+        fetch_start = str(last_cached + timedelta(days=1)) if last_cached else "2006-01-01"
+        new = _yf_full(ticker, start=fetch_start)
         if new.empty or len(new) < MIN_ROWS:
-            # Try 2: niftyindices.com (NSE official — full gapless history)
             if nse_name:
                 print(f"      yfinance insufficient → trying niftyindices.com for '{nse_name}'…")
-                new = _fetch_from_niftyindices(nse_name, start_date="2006-01-01")
+                new = _fetch_from_niftyindices(nse_name, start_date=fetch_start)
                 if not new.empty:
                     print(f"      ✓ niftyindices: {len(new)} rows")
     else:
-        # Incremental: only fetch missing tail
+        # Incremental: only fetch the missing tail (from last_cached+1 to today)
         start_inc = str(last_cached + timedelta(days=1))
         new = _fetch_yfinance(ticker, start_inc, str(today + timedelta(days=1)))
-        # Fallback to niftyindices.com for tickers where yfinance is dead (e.g. ^CNXSC)
+        # Fallback 1: niftyindices.com
         if new.empty and nse_name:
-            ni_full = _fetch_from_niftyindices(nse_name, start_date=start_inc)
-            if not ni_full.empty:
-                new = ni_full[ni_full.index >= pd.Timestamp(start_inc)]
+            ni_tail = _fetch_from_niftyindices(nse_name, start_date=start_inc)
+            if not ni_tail.empty:
+                new = ni_tail[ni_tail.index >= pd.Timestamp(start_inc)]
+        # Fallback 2: NSE daily archive CSVs (works for recent dates)
+        if new.empty and archive_name:
+            arc = _fetch_nse_archive_days(archive_name,
+                                          last_cached + timedelta(days=1), today)
+            if not arc.empty:
+                new = arc
+                print(f"      ✓ NSE archive: {len(new)} rows for {name}")
 
     # ── Merge ──────────────────────────────────────────────────────────────────
     if not new.empty:
