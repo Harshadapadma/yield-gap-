@@ -130,6 +130,11 @@ for name, ticker in INDIAN_INDICES.items():
         # Incremental: only fetch missing tail
         start_inc = str(last_cached + timedelta(days=1))
         new = _fetch_yfinance(ticker, start_inc, str(today + timedelta(days=1)))
+        # Fallback to niftyindices.com for tickers where yfinance is dead (e.g. ^CNXSC)
+        if new.empty and nse_name:
+            ni_full = _fetch_from_niftyindices(nse_name, start_date=start_inc)
+            if not ni_full.empty:
+                new = ni_full[ni_full.index >= pd.Timestamp(start_inc)]
 
     # ── Merge ──────────────────────────────────────────────────────────────────
     if not new.empty:
@@ -191,9 +196,11 @@ for name, ticker in INDIAN_INDICES.items():
 # ── Step 2: ETFs + global indices via yfinance ────────────────────────────────
 print(f"\n[2/2] Fetching ETF / global index prices via yfinance…\n")
 
+_SECTION1_TICKERS = set(INDIAN_INDICES.values())  # already handled above; skip in section 2
+
 yf_only = {
     n: t for n, t in INSTRUMENTS.items()
-    if t not in _TICKER_TO_NSE_NAME and t != "NIFTY500_SEED"
+    if t not in _TICKER_TO_NSE_NAME and t != "NIFTY500_SEED" and t not in _SECTION1_TICKERS
 }
 
 for name, ticker in yf_only.items():

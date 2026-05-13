@@ -39,11 +39,12 @@ from datetime import datetime as _datetime, timezone as _tz, timedelta as _td
 _IST = _tz(_td(hours=5, minutes=30))
 
 # ── NSE archive name → ticker ─────────────────────────────────────────────────
-# ^CNXSC excluded — uses NSE historical indices API (correct ~17900 scale)
+# ^CNXSC included — yfinance ticker ^CNXSMALL is dead (404); niftyindices.com is the source
 _NSE_NAME_TO_TICKER = {
     "Nifty 50":           "^NSEI",
     "Nifty Bank":         "^NSEBANK",
     "Nifty Midcap 100":   "NIFTY_MIDCAP_100.NS",
+    "Nifty Smallcap 100": "^CNXSC",   # yfinance ^CNXSMALL is dead; use niftyindices.com
     "Nifty IT":           "^CNXIT",
     "Nifty Pharma":       "^CNXPHARMA",
     "Nifty Auto":         "^CNXAUTO",
