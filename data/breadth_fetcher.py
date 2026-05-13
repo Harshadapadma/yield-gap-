@@ -446,6 +446,14 @@ def compute_breadth_series(
     stock_monthly = stock_rets.resample(freq).last()
     bench_monthly = bench_rets.resample(freq).last()
 
+    # If the last period label is a future date (e.g. BME labels May 1-12 data as May 29),
+    # relabel it to the actual last data date so the chart doesn't extend into the future.
+    if not stock_monthly.empty and stock_monthly.index[-1] > end:
+        new_idx = stock_monthly.index[:-1].append(pd.DatetimeIndex([end]))
+        stock_monthly.index = new_idx
+        new_bidx = bench_monthly.index[:-1].append(pd.DatetimeIndex([end]))
+        bench_monthly.index = new_bidx
+
     # Always include the most recent available date
     if stock_monthly.empty or stock_monthly.index[-1] < end:
         last_stock = stock_rets.loc[stock_rets.index <= end].tail(1)

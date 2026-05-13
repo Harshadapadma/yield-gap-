@@ -568,12 +568,10 @@ def _render_results(
     # Full-history pct series (for SD bands) — before date filter
     full_pct = breadth_df["pct_beating"].dropna()
 
-    # Apply date filter — always include the last row even if its BME label is a future month-end
-    last_data_date = breadth_df.index.max().date()
-    effective_date_to = max(date_to, last_data_date)
+    # Apply date filter
     mask = (
         (breadth_df.index.date >= date_from) &
-        (breadth_df.index.date <= effective_date_to)
+        (breadth_df.index.date <= date_to)
     )
     df = breadth_df.loc[mask]
 
@@ -584,12 +582,12 @@ def _render_results(
         lookback = breadth_df.index.date < date_from
         anchor = breadth_df.loc[lookback].iloc[[-1]] if lookback.any() else pd.DataFrame()
         combined = pd.concat([anchor, df]) if not anchor.empty else df
-        bdays = pd.bdate_range(date_from, effective_date_to)
+        bdays = pd.bdate_range(date_from, date_to)
         df = (
             combined
             .reindex(combined.index.union(pd.DatetimeIndex(bdays)))
             .ffill()
-            .loc[lambda x: (x.index.date >= date_from) & (x.index.date <= effective_date_to)]
+            .loc[lambda x: (x.index.date >= date_from) & (x.index.date <= date_to)]
         )
 
     if df.empty:
