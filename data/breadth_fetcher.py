@@ -137,10 +137,15 @@ def fetch_constituent_list(universe_name: str, max_age_hours: int = 24) -> list[
     return symbols
 
 
+_PLACEHOLDER_PREFIXES = ("DUMMY",)
+
 def tickers_for_universe(universe_name: str) -> list[str]:
     """Return yfinance tickers (with .NS suffix) for a universe."""
     symbols = fetch_constituent_list(universe_name)
-    return [f"{s}.NS" for s in symbols]
+    return [
+        f"{s}.NS" for s in symbols
+        if not any(s.upper().startswith(p) for p in _PLACEHOLDER_PREFIXES)
+    ]
 
 
 # ── Price fetching ─────────────────────────────────────────────────────────────

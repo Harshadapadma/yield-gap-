@@ -61,7 +61,9 @@ INDIAN_INDICES = {
     "Nifty 50":           "^NSEI",
     "Nifty Bank":         "^NSEBANK",
     "Nifty Midcap 100":   "^NSMIDCP",
-    "Nifty Smallcap 100": "^CNXSMALL",   # may fail — handled below
+    # Use ^CNXSC (the INSTRUMENTS key) so the saved CSV matches what the runtime reads.
+    # _fetch_yfinance internally maps ^CNXSC → ^CNXSMALL; niftyindices is the fallback.
+    "Nifty Smallcap 100": "^CNXSC",
     "Nifty IT":           "^CNXIT",
     "Nifty Pharma":       "^CNXPHARMA",
     "Nifty Auto":         "^CNXAUTO",
@@ -73,7 +75,7 @@ INDIAN_INDICES = {
 
 # Alternative tickers to try when the primary fails
 ALTERNATIVES = {
-    "^CNXSMALL":  ["^CNXSC", "SETFNN50.NS"],      # Smallcap 100 alternatives
+    "^CNXSC":     ["SETFNN50.NS"],                 # Smallcap 100 alternatives (^CNXSMALL used internally by _fetch_yfinance)
     "^CNXENERGY": ["^CNXINFRA", "ENERGYBEES.NS"],  # Energy alternatives
     "^CNXREALTY": ["ITREIT.NS"],                    # Realty alternatives
 }
