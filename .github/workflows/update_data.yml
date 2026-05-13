@@ -44,6 +44,3 @@ jobs:
           git pull --rebase origin main
           git push
 
-      - name: Trigger Render redeploy
-        if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}
-        run: curl -s "${{ secrets.RENDER_DEPLOY_HOOK }}"
