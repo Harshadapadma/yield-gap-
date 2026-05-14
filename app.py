@@ -248,41 +248,6 @@ with st.sidebar:
 
     st.markdown("<hr style='border-color:#21262D;margin:6px 0 10px 0'>", unsafe_allow_html=True)
 
-    # ── Trigger GitHub Actions data update ───────────────────────────────────
-    if st.button("⬆️ Update Data Now", use_container_width=True, key="trigger_gh_action"):
-        try:
-            import os as _os
-            import requests as _req
-            # Try Streamlit secrets first, fall back to environment variable (Render)
-            try:
-                _token = st.secrets.get("GITHUB_TOKEN", "")
-                _repo  = st.secrets.get("GITHUB_REPO", "Harshadapadma/yield-gap-")
-            except Exception:
-                _token = ""
-                _repo  = "Harshadapadma/yield-gap-"
-            _token = _token or _os.environ.get("GITHUB_TOKEN", "")
-            _repo  = _repo  or _os.environ.get("GITHUB_REPO", "Harshadapadma/yield-gap-")
-            if not _token:
-                st.sidebar.error("Set GITHUB_TOKEN in Render Environment Variables.")
-            else:
-                _r = _req.post(
-                    f"https://api.github.com/repos/{_repo}/actions/workflows/update_data.yml/dispatches",
-                    headers={
-                        "Authorization": f"Bearer {_token}",
-                        "Accept": "application/vnd.github+json",
-                    },
-                    json={"ref": "main"},
-                    timeout=10,
-                )
-                if _r.status_code == 204:
-                    st.sidebar.success("Update triggered! Data will refresh in ~5 min.")
-                else:
-                    st.sidebar.error(f"GitHub API error: {_r.status_code}")
-        except Exception as _e:
-            st.sidebar.error(f"Failed: {_e}")
-
-    st.markdown("<hr style='border-color:#21262D;margin:6px 0 10px 0'>", unsafe_allow_html=True)
-
     # ── Page-specific sidebar controls ────────────────────────────────────────
     if active_page == "yield_gap":
         pe_ratio = 21.27   # fallback; actual PE comes from cached CSV in load_all()

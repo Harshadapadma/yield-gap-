@@ -18,7 +18,7 @@ After running:
 import sys, time, warnings
 warnings.filterwarnings("ignore")
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
