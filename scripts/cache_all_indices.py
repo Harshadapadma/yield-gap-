@@ -147,19 +147,24 @@ for name, ticker in INDIAN_INDICES.items():
     else:
         # Incremental: only fetch the missing tail (from last_cached+1 to today)
         start_inc = str(last_cached + timedelta(days=1))
-        new = _fetch_yfinance(ticker, start_inc, str(today + timedelta(days=1)))
-        # Fallback 1: niftyindices.com
+        # Source priority:
+        # 1. NSE daily archive — only publishes CLOSING prices after market close,
+        #    so a mid-day run gets nothing and waits for the 4:30 PM scheduled run.
+        # 2. yfinance — returns last completed session close for most tickers;
+        #    falls back here if archive is empty (e.g. very old dates, non-NSE tickers).
+        # 3. niftyindices.com — for tickers where yfinance is unreliable.
+        new = pd.Series(dtype=float)
+        if archive_name:
+            new = _fetch_nse_archive_days(archive_name,
+                                          last_cached + timedelta(days=1), today)
+            if not new.empty:
+                print(f"      ✓ NSE archive: {len(new)} rows")
+        if new.empty:
+            new = _fetch_yfinance(ticker, start_inc, str(today + timedelta(days=1)))
         if new.empty and nse_name:
             ni_tail = _fetch_from_niftyindices(nse_name, start_date=start_inc)
             if not ni_tail.empty:
                 new = ni_tail[ni_tail.index >= pd.Timestamp(start_inc)]
-        # Fallback 2: NSE daily archive CSVs (works for recent dates)
-        if new.empty and archive_name:
-            arc = _fetch_nse_archive_days(archive_name,
-                                          last_cached + timedelta(days=1), today)
-            if not arc.empty:
-                new = arc
-                print(f"      ✓ NSE archive: {len(new)} rows for {name}")
 
     # ── Merge ──────────────────────────────────────────────────────────────────
     if not new.empty:
