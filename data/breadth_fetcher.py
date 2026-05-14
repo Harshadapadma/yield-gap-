@@ -200,7 +200,14 @@ def _save_cached_price(ticker: str, series: pd.Series, persist_today: bool | Non
 
 
 def _is_cache_fresh(ticker: str) -> bool:
-    """File-mtime freshness check — no CSV read needed. 4-day gap covers weekends/holidays."""
+    """
+    Returns True only when the cached data is actually up to date.
+
+    During market hours: mtime check only (today's close not available yet).
+    After market close: also verify the last data row is today's date — a file
+    modified at 11 AM (market open) has today's mtime but no today's close,
+    so the 5 PM run must re-fetch it.
+    """
     path = _price_cache_path(ticker)
     if not path.exists():
         return False
@@ -208,7 +215,14 @@ def _is_cache_fresh(ticker: str) -> bool:
         mod_date = datetime.fromtimestamp(path.stat().st_mtime, tz=_IST).date()
     except OSError:
         return False
-    return (_now_ist().date() - mod_date).days <= 4
+    today = _now_ist().date()
+    if (today - mod_date).days > 4:
+        return False
+    if not _is_market_hours():
+        s = _load_cached_price(ticker)
+        if s is None or s.empty or s.index[-1].date() < today:
+            return False
+    return True
 
 
 def fetch_single_price(ticker: str, start: str = DATA_START) -> pd.Series:
