@@ -307,6 +307,53 @@ def _live_bond_investing_com() -> float | None:
     return None
 
 
+def _live_bond_stooq() -> float | None:
+    """Stooq.com — India 10Y bond yield daily CSV (most recent close)."""
+    try:
+        r = _S.get("https://stooq.com/q/d/l/?s=10inbnd.b&i=d", timeout=15)
+        if r.status_code != 200 or "Date" not in r.text:
+            return None
+        df = pd.read_csv(io.StringIO(r.text), parse_dates=["Date"], index_col="Date")
+        if df.empty or "Close" not in df.columns:
+            return None
+        v = float(df["Close"].dropna().iloc[-1])
+        if _yield_valid(v):
+            logger.info("Stooq bond: %.3f%%", v)
+            return v
+    except Exception as exc:
+        logger.debug("Stooq bond: %s", exc)
+    return None
+
+
+def _live_bond_yfinance() -> float | None:
+    """yfinance — India 10Y bond yield (IN10YT=RR or GIND10YR=X)."""
+    try:
+        import yfinance as yf  # type: ignore
+        for ticker in ("IN10YT=RR", "GIND10YR=X"):
+            try:
+                df = yf.download(ticker, period="5d", interval="1d",
+                                 progress=False, auto_adjust=False)
+                if df is None or df.empty:
+                    continue
+                col = df.get("Close", df.get("Adj Close"))
+                if col is None:
+                    continue
+                if isinstance(col, pd.DataFrame):
+                    col = col.squeeze()
+                vals = col.dropna()
+                if vals.empty:
+                    continue
+                v = float(vals.iloc[-1])
+                if _yield_valid(v):
+                    logger.info("yfinance bond (%s): %.3f%%", ticker, v)
+                    return v
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.debug("yfinance bond: %s", exc)
+    return None
+
+
 def _live_bond_marketwatch() -> float | None:
     """MarketWatch — India 10Y bond yield CSV download."""
     try:
@@ -393,8 +440,10 @@ def _fetch_live_bond_value() -> tuple[float | None, str]:
     Always called fresh — no caching here.
     """
     sources = [
-        ("Trading Economics", _live_bond_trading_economics),  # ✅ confirmed working
-        ("Investing.com",     _live_bond_investing_com),      # ✅ confirmed working
+        ("Stooq",            _live_bond_stooq),              # daily CSV — reliable, no auth
+        ("yfinance",         _live_bond_yfinance),           # IN10YT=RR / GIND10YR=X
+        ("Trading Economics", _live_bond_trading_economics),
+        ("Investing.com",     _live_bond_investing_com),
         ("NSE G-Sec",         _live_bond_nse_gsec),           # works when market is open
         ("FRED",              _live_bond_fred),               # monthly, last resort
         ("Nasdaq DL",         _live_bond_nasdaq),             # free with API key from data.nasdaq.com
