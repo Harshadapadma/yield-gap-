@@ -928,7 +928,7 @@ def _fetch_yfinance(ticker: str, start: str, end: str) -> pd.Series:
         time.sleep(0.1)
 
     if not chunks:
-        # Fallback: Ticker.history() when yf.download() fails (e.g. ^CNXSC, some NSE tickers)
+        # Fallback 1: Ticker.history() with explicit dates
         try:
             h = yf.Ticker(yf_sym).history(
                 start=str(start_dt),
@@ -937,7 +937,10 @@ def _fetch_yfinance(ticker: str, start: str, end: str) -> pd.Series:
             )
             if not h.empty and "Close" in h.columns:
                 s = h["Close"].dropna()
-                s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+                idx = pd.to_datetime(s.index)
+                if idx.tz is not None:
+                    idx = idx.tz_convert(None)
+                s.index = idx.normalize()
                 s = s[~s.index.duplicated(keep="last")].sort_index()
                 s.name = ticker
                 if not s.empty:
@@ -945,6 +948,23 @@ def _fetch_yfinance(ticker: str, start: str, end: str) -> pd.Series:
                     return s
         except Exception as exc:
             log.debug("Ticker.history fallback for %s: %s", yf_sym, exc)
+
+        # Fallback 2: period="5d" — explicit date-range returns 0 rows when the session
+        # is still open (intraday).  period="5d" always returns the most recently
+        # available price regardless of whether today's session has closed.
+        if start_dt >= date.today() - timedelta(days=10):
+            try:
+                raw5 = yf.download(yf_sym, period="5d", interval="1d",
+                                   auto_adjust=True, progress=False)
+                if raw5 is not None and not raw5.empty:
+                    s5 = _yf_raw_to_series(raw5, ticker)
+                    s5 = s5[s5.index >= pd.Timestamp(start_dt)].sort_index()
+                    if not s5.empty:
+                        log.info("period=5d fallback for %s: %d rows", yf_sym, len(s5))
+                        return s5
+            except Exception as exc:
+                log.debug("period=5d fallback for %s: %s", yf_sym, exc)
+
         log.warning("yfinance returned no data for %s (%s → %s)", yf_sym, start, end)
         return pd.Series(dtype=float)
 

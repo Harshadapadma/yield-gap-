@@ -148,10 +148,11 @@ for name, ticker in INDIAN_INDICES.items():
         # Incremental: only fetch the missing tail (from last_cached+1 to today)
         start_inc = str(last_cached + timedelta(days=1))
         # Source priority:
-        # 1. NSE daily archive — published after market close; best source for exact close.
-        # 2. yfinance date-range — works post-close; may return 0 rows if market still open.
-        # 3. yfinance period=5d — always returns the latest available price (works any time).
-        # 4. niftyindices.com — for tickers where yfinance is unreliable.
+        # 1. NSE daily archive — best source for exact close; published after market close.
+        # 2. yfinance — _fetch_yfinance internally falls back to period=5d when an explicit
+        #    date-range returns 0 rows (e.g. session still open), so this always returns the
+        #    most recent available price regardless of time of day.
+        # 3. niftyindices.com — for tickers where yfinance is unreliable.
         new = pd.Series(dtype=float)
         if archive_name:
             new = _fetch_nse_archive_days(archive_name,
@@ -159,28 +160,9 @@ for name, ticker in INDIAN_INDICES.items():
             if not new.empty:
                 print(f"      ✓ NSE archive: {len(new)} rows")
         if new.empty:
+            # _fetch_yfinance now includes a period=5d fallback inside it — this handles
+            # the case where the market is still open and explicit date-range returns 0 rows.
             new = _fetch_yfinance(ticker, start_inc, str(today + timedelta(days=1)))
-        # If explicit date-range fetch returned nothing (e.g. market still open, data
-        # not yet propagated), fall back to period="5d" which always returns the most
-        # recent available close from yfinance regardless of market hours.
-        if new.empty:
-            import yfinance as _yf
-            yf_sym = ticker
-            try:
-                raw = _yf.download(yf_sym, period="5d", interval="1d",
-                                   auto_adjust=True, progress=False)
-                if raw is not None and not raw.empty:
-                    col = raw["Close"]
-                    if hasattr(col, "squeeze"):
-                        col = col.squeeze()
-                    s5 = col.dropna()
-                    s5.index = pd.to_datetime(s5.index).tz_localize(None).normalize()
-                    s5 = s5[s5.index >= pd.Timestamp(start_inc)]
-                    if not s5.empty:
-                        new = s5
-                        print(f"      ✓ yfinance period=5d: {len(new)} rows")
-            except Exception as _e:
-                pass
         if new.empty and nse_name:
             ni_tail = _fetch_from_niftyindices(nse_name, start_date=start_inc)
             if not ni_tail.empty:
