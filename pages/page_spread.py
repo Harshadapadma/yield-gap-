@@ -514,11 +514,17 @@ def render() -> None:
     date_from, date_to = _date_filter()
 
     with st.spinner(f"Loading {name_a} and {name_b}..."):
-        # Use cache-only loader — data pre-fetched by GitHub Actions
-        s_a_raw = load_cached_price(ticker_a, start_date=DATA_START)
-        s_b_raw = load_cached_price(ticker_b, start_date=DATA_START)
-        status_a = {"source": "local CSV", "message": "Cached"}
-        status_b = {"source": "local CSV", "message": "Cached"}
+        if is_stock_a:
+            s_a_raw, status_a = get_stock_price(ticker_a, start_date=DATA_START)
+        else:
+            s_a_raw  = load_cached_price(ticker_a, start_date=DATA_START)
+            status_a = {"source": "local CSV", "message": "Cached"}
+
+        if is_stock_b:
+            s_b_raw, status_b = get_stock_price(ticker_b, start_date=DATA_START)
+        else:
+            s_b_raw  = load_cached_price(ticker_b, start_date=DATA_START)
+            status_b = {"source": "local CSV", "message": "Cached"}
 
     if s_a_raw.empty:
         st.error(f"Could not fetch data for {name_a}.\n\n`{status_a['message']}`")
