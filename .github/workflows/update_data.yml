@@ -2,7 +2,9 @@ name: Update Market Data
 
 on:
   schedule:
-    - cron: '0 10 * * 1-5'   # Mon-Fri 10:00 UTC = 15:30 IST
+    
+  - cron: '0 9 * * 1-5'    # Mon-Fri 09:00 UTC = 14:30 IST
+  - cron: '0 10 * * 1-5'   # Mon-Fri 10:00 UTC = 15:30 IST   # Mon-Fri 10:00 UTC = 15:30 IST
   workflow_dispatch:
 
 permissions:
